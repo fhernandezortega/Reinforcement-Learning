@@ -1,0 +1,82 @@
+{
+  "50": {
+    "mean_steps": 25.319,
+    "success_rate": 0.53
+  },
+  "100": {
+    "mean_steps": 27.405,
+    "success_rate": 0.478
+  },
+  "150": {
+    "mean_steps": 18.23,
+    "success_rate": 0.707
+  },
+  "200": {
+    "mean_steps": 20.059,
+    "success_rate": 0.664
+  },
+  "250": {
+    "mean_steps": 16.571,
+    "success_rate": 0.751
+  },
+  "300": {
+    "mean_steps": 14.846,
+    "success_rate": 0.798
+  },
+  "350": {
+    "mean_steps": 19.695,
+    "success_rate": 0.671
+  },
+  "400": {
+    "mean_steps": 17.986,
+    "success_rate": 0.719
+  },
+  "450": {
+    "mean_steps": 15.842,
+    "success_rate": 0.772
+  },
+  "500": {
+    "mean_steps": 19.357,
+    "success_rate": 0.675
+  },
+  "550": {
+    "mean_steps": 18.214,
+    "success_rate": 0.711
+  },
+  "600": {
+    "mean_steps": 16.498,
+    "success_rate": 0.746
+  },
+  "650": {
+    "mean_steps": 17.502,
+    "success_rate": 0.748
+  },
+  "700": {
+    "mean_steps": 15.421,
+    "success_rate": 0.783
+  },
+  "750": {
+    "mean_steps": 19.565,
+    "success_rate": 0.674
+  },
+  "800": {
+    "mean_steps": 15.875,
+    "success_rate": 0.783
+  },
+  "850": {
+    "mean_steps": 20.298,
+    "success_rate": 0.663
+  },
+  "900": {
+    "mean_steps": 16.812,
+    "success_rate": 0.781
+  },
+  "950": {
+    "mean_steps": 25.589,
+    "success_rate": 0.537
+  },
+  "1000": {
+    "mean_steps": 16.792,
+    "success_rate": 0.759
+  }
+}
