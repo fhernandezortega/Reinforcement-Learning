@@ -2,200 +2,230 @@ import sys
 import os
 
 sys.path.append(
-    os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            ".."
-        )
-    )
+    os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 )
 
 import numpy as np
-from itertools import product
+import qutip as qt
+from dataclasses import dataclass
+from typing import List, Tuple, Optional
 
 
-# ==========================================
-# CaH+ Molecular Hamiltonian
-# Eq. S9 of the paper:
-# H = 2pi R J^2 - g muN J.B - gI muN I.B
-#     - 2pi cIJ I.J
-# Parameters from NIST experiments
-# B = 0.36 mT
-# ==========================================
+# ─────────────────────────────────────────────────────────────────────
+# Angular momentum operators
+# ─────────────────────────────────────────────────────────────────────
+
+def Jz_op(J):
+    dim  = int(2*J + 1)
+    diag = np.array([J - k for k in range(dim)], dtype=float)
+    return qt.Qobj(np.diag(diag))
+
+def Jp_op(J):
+    dim     = int(2*J + 1)
+    mJ_vals = np.array([J - k for k in range(dim)])
+    mat     = np.zeros((dim, dim), dtype=complex)
+    for col, mJ in enumerate(mJ_vals):
+        row = col - 1
+        if 0 <= row < dim:
+            mat[row, col] = np.sqrt(J*(J+1) - mJ*(mJ+1))
+    return qt.Qobj(mat)
+
+def Jm_op(J): return Jp_op(J).dag()
+def Jx_op(J): return 0.5 * (Jp_op(J) + Jm_op(J))
+def Jy_op(J): return -0.5j * (Jp_op(J) - Jm_op(J))
+
+# Nuclear spin I=1/2
+Iz = 0.5 * qt.sigmaz()
+Ip = qt.sigmap()
+Im = qt.sigmam()
+Ix = 0.5 * qt.sigmax()
+Iy = 0.5 * qt.sigmay()
+
+
+# =====================================================================
+# MolecularConstants
+# =====================================================================
+
+@dataclass
+class MolecularConstants:
+    """
+    Constantes moleculares de CaH+ (Chou et al., Nature 2017).
+    Importable por env/rlqls_env_cah.py y physics/pulses_cah.py.
+    """
+    R:      float = 142.5e9    # constante rotacional (Hz)
+    g:      float = -0.00040   # g rotacional
+    gI:     float = 5.585695   # g nuclear (proton)
+    cIJ:    float = 19.6e3     # spin-rotacion (Hz)
+    muN:    float = 7.622593e6 # magneton nuclear (Hz/T)
+    B:      float = 0.36e-3    # campo magnetico (T)
+    I_spin: float = 0.5
+    J_min:  int   = 1
+    J_max:  int   = 2
+
+
+# =====================================================================
+# CaHHamiltonian — implementacion principal
+# =====================================================================
 
 class CaHHamiltonian:
+    """
+    Hamiltoniano completo de CaH+ con acoplamiento I·J (Ec. S9).
 
-    def __init__(self):
+      H = 2π R J² − g µN J·B − gI µN I·B − 2π cIJ I·J
 
-        # ==================================
-        # Molecular constants (SI units)
-        # from Chou et al. Nature 2017
-        # ==================================
+    Base no acoplada: |J, mJ, mI⟩
+    16 estados para J in {1, 2}.
+    """
 
-        # Rotational constant (Hz)
-        self.R = 142.5e9
+    # Constantes por defecto (se sobreescriben si se pasa MolecularConstants)
+    R      = 142.5e9
+    g      = -0.00040
+    gI     = 5.585695
+    cIJ    = 19.6e3
+    muN    = 7.622593e6
+    B      = 0.36e-3
+    I_spin = 0.5
 
-        # Magnetic field (T)
-        self.B = 0.36e-3
+    def __init__(self, constants: Optional[MolecularConstants] = None):
+        if constants is not None:
+            self.R           = constants.R
+            self.g           = constants.g
+            self.gI          = constants.gI
+            self.cIJ         = constants.cIJ
+            self.muN         = constants.muN
+            self.B           = constants.B
+            self.J_manifolds = list(range(constants.J_min,
+                                          constants.J_max + 1))
+        else:
+            self.J_manifolds = [1, 2]
 
-        # Nuclear magneton (Hz/T)
-        self.muN = 7.622593e6
+        self._build_basis()
+        self._build_hamiltonian()
 
-        # Rotational g-factor
-        self.g = -0.00040
-
-        # Nuclear g-factor (H nucleus)
-        self.gI = 5.585695
-
-        # Spin-rotation constant (Hz)
-        self.cIJ = 19.6e3
-
-        # Nuclear spin (H: I=1/2)
-        self.I_spin = 0.5
-
-        # Consider J = 1, 2 manifolds
-        self.J_max = 2
-
-        # ==================================
-        # Build basis states
-        # |J, m, xi> where xi = +/-
-        # Total: 4*(2*1+1) + 4*(2*2+1) = 16
-        # but paper uses |J, mJ, mI, xi>
-        # We use coupled basis |J, m, xi>
-        # with m = total magnetic quantum number
-        # ==================================
-
-        self.basis = self._build_basis()
-
-        self.n_states = len(self.basis)
-
-    # ======================================
-    # Build basis states
-    # ======================================
+    # ─── Basis ───────────────────────────────────────────────────────
 
     def _build_basis(self):
+        self.basis: List[Tuple[int, int, float]] = []
+        for J in self.J_manifolds:
+            for mJ in range(-J, J + 1):
+                for mI in [-0.5, 0.5]:
+                    self.basis.append((J, mJ, mI))
+        self.n_states = len(self.basis)
 
-        """
-        Build basis |J, mJ, mI> for J=1,2
-        I=1/2 (proton spin)
+    # ─── Hamiltonian ──────────────────────────────────────────────────
 
-        Returns list of (J, mJ, mI) tuples
-        """
+    def _build_hamiltonian(self):
+        blocks = {}
+        for J in self.J_manifolds:
+            dim_J = int(2*J + 1)
 
-        basis = []
+            Jz_ = qt.tensor(Jz_op(J), qt.qeye(2))
+            Jp_ = qt.tensor(Jp_op(J), qt.qeye(2))
+            Jm_ = qt.tensor(Jm_op(J), qt.qeye(2))
 
-        mI_vals = [-0.5, 0.5]
+            _Iz = qt.tensor(qt.qeye(dim_J), Iz)
+            _Ip = qt.tensor(qt.qeye(dim_J), Ip)
+            _Im = qt.tensor(qt.qeye(dim_J), Im)
 
-        for J in [1, 2]:
+            IJ = _Iz * Jz_ + 0.5 * (_Ip * Jm_ + _Im * Jp_)
 
-            mJ_vals = list(range(-J, J + 1))
+            H_J = (2*np.pi * self.R * J*(J+1)
+                   * qt.tensor(qt.qeye(dim_J), qt.qeye(2))
+                   - self.g  * self.muN * self.B * Jz_ * 2*np.pi
+                   - self.gI * self.muN * self.B * _Iz * 2*np.pi
+                   - 2*np.pi * self.cIJ * IJ)
 
-            for mJ in mJ_vals:
-                for mI in mI_vals:
+            blocks[J] = H_J
 
-                    basis.append((J, mJ, mI))
+        H_full = np.zeros((self.n_states, self.n_states), dtype=complex)
 
-        return basis
+        def gidx(J, mJ, mI):
+            return self.basis.index((J, mJ, mI))
 
-    # ======================================
-    # Matrix elements
-    # ======================================
+        for J, H_J in blocks.items():
+            mat     = H_J.full()
+            mJ_vals = list(range(-J, J+1))
+            mI_vals = [-0.5, 0.5]
+            for mJ_i, mJ in enumerate(mJ_vals):
+                for mI_i, mI in enumerate(mI_vals):
+                    row_l = mJ_i*2 + mI_i
+                    g_row = gidx(J, mJ, mI)
+                    for mJ_j, mJp in enumerate(mJ_vals):
+                        for mI_j, mIp in enumerate(mI_vals):
+                            col_l = mJ_j*2 + mI_j
+                            g_col = gidx(J, mJp, mIp)
+                            H_full[g_row, g_col] = mat[row_l, col_l]
 
-    def _build_matrix(self):
+        self.H_matrix = H_full
+        self.H_qobj   = qt.Qobj(H_full)
 
-        n = self.n_states
-
-        H = np.zeros((n, n), dtype=complex)
-
-        for idx, (J, mJ, mI) in enumerate(self.basis):
-
-            # ==========================
-            # Diagonal: rotational term
-            # E_rot = 2pi R J(J+1)
-            # ==========================
-
-            E_rot = 2 * np.pi * self.R * J * (J + 1)
-
-            # ==========================
-            # Diagonal: Zeeman terms
-            # E_Z = -g muN mJ B
-            #      - gI muN mI B
-            # ==========================
-
-            E_Z = (
-                - self.g * self.muN * mJ * self.B
-                - self.gI * self.muN * mI * self.B
-            )
-
-            # ==========================
-            # Diagonal: spin-rotation
-            # E_sr = -2pi cIJ mI mJ
-            # (diagonal part)
-            # ==========================
-
-            E_sr = -2 * np.pi * self.cIJ * mI * mJ
-
-            H[idx, idx] = E_rot + E_Z + E_sr
-
-        return H
-
-    # ======================================
-    # Diagonalize
-    # ======================================
+    # ─── API original (sin cambios) ───────────────────────────────────
 
     def build(self):
-
-        return self._build_matrix()
+        """Devuelve H_matrix (compatibilidad con codigo original)."""
+        return self.H_matrix
 
     def diagonalize(self):
-
-        H = self.build()
-
-        energies, states = np.linalg.eigh(H)
-
-        return energies, states
-
-    # ======================================
-    # Get state labels
-    # ======================================
+        energies, eigvecs = np.linalg.eigh(self.H_matrix)
+        self.energies = energies
+        self.eigvecs  = eigvecs
+        return energies, eigvecs
 
     def get_labels(self):
+        return [f"|J={J}, mJ={mJ:+d}, mI={mI:+.1f}>"
+                for (J, mJ, mI) in self.basis]
 
-        labels = []
+    def get_boltzmann(self, T_K: float = 300.0) -> np.ndarray:
+        """Poblacion termica en base de eigenstados (API original)."""
+        energies, _ = self.diagonalize()
+        kB   = 1.380649e-23
+        hbar = 1.054571817e-34
+        E_J  = energies * hbar
+        beta = 1.0 / (kB * T_K)
+        w    = np.exp(-beta * E_J)
+        return w / w.sum()
 
-        for (J, mJ, mI) in self.basis:
+    # ─── API nueva requerida por rlqls_env_cah.py ─────────────────────
 
-            labels.append(
-                f"|{J},{mJ},{mI:+.1f}>"
-            )
+    def boltzmann_population(self, T_bbr: float = 300.0,
+                              use_eigenstates: bool = True) -> np.ndarray:
+        """Alias de get_boltzmann() con la firma del entorno RL."""
+        return self.get_boltzmann(T_K=T_bbr)
 
-        return labels
+    def state_index(self, J: int, mJ: int, mI: float) -> int:
+        return self.basis.index((J, mJ, float(mI)))
+
+    def __repr__(self):
+        return (f"CaHHamiltonian(J={self.J_manifolds[0]}..{self.J_manifolds[-1]}, "
+                f"n_states={self.n_states})")
 
 
-# ==========================================
-# Test
-# ==========================================
+# =====================================================================
+# CaHPlusHamiltonian — alias directo de CaHHamiltonian
+# Permite importar con ambos nombres sin duplicar codigo.
+# =====================================================================
+
+CaHPlusHamiltonian = CaHHamiltonian
+
+
+# ─────────────────────────────────────────────
+# Quick self-test
+# ─────────────────────────────────────────────
 
 if __name__ == "__main__":
-
+    # API original
     ham = CaHHamiltonian()
+    print(f"{ham}")
+    P = ham.get_boltzmann(T_K=300.0)
+    print(f"get_boltzmann sum = {P.sum():.6f}")
 
-    print(f"\nNumber of states: {ham.n_states}", flush=True)
+    # API nueva via alias
+    ham2 = CaHPlusHamiltonian(MolecularConstants(J_max=2))
+    ham2.diagonalize()
+    P2 = ham2.boltzmann_population(T_bbr=300.0)
+    print(f"boltzmann_population sum = {P2.sum():.6f}")
 
-    print("\nBasis states:", flush=True)
-
-    for i, label in enumerate(ham.get_labels()):
-        print(f"  {i:2d}: {label}", flush=True)
-
-    H = ham.build()
-
-    energies, _ = ham.diagonalize()
-
-    print("\nDiagonal energies (GHz):", flush=True)
-
-    for i, E in enumerate(np.diag(H).real):
-        print(
-            f"  {i:2d}: {E/1e9:.6f} GHz  "
-            f"{ham.get_labels()[i]}",
-            flush=True
-        )
+    # Verificar que son el mismo objeto
+    assert CaHPlusHamiltonian is CaHHamiltonian
+    print("CaHPlusHamiltonian is CaHHamiltonian ✓")
+    print("Todos los imports funcionaran correctamente.")

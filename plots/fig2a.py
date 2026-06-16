@@ -13,409 +13,289 @@ sys.path.append(
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
-from matplotlib.lines import Line2D
 
 
 # ==========================================
 # CaH+ Energy Level Diagram (Fig. 2a)
 # ==========================================
-#
-# States labeled I-XVI
-# J=1: states I-VI    (6 states)
-# J=2: states VII-XVI (10 states)
-#
-# Quantum numbers: |J, m, xi>
-# xi = + or -
-# ==========================================
 
-# ==========================================
-# State definitions
-# ==========================================
-
-# J=1 manifold (m = -3/2, -1/2, 1/2, 3/2)
-# xi = + and -
-
-J1_states = [
-    # (label, m,    xi, x_pos)
-    ("I",    -3/2, "+", 0),
-    ("II",   -1/2, "+", 1),
-    ("III",   1/2, "+", 2),
-    ("IV",  -3/2,  "-", 0),
-    ("V",   -1/2,  "-", 1),
-    ("VI",   1/2,  "-", 2),
-]
-
-# J=2 manifold (m = -5/2, -3/2, -1/2, 1/2, 3/2, 5/2)
-# xi = + and -
-
-J2_states = [
-    # (label, m,    xi, x_pos)
-    ("VII",  -3/2, "+", 0),
-    ("VIII", -1/2, "+", 1),
-    ("IX",    1/2, "+", 2),
-    ("X",     3/2, "+", 3),
-    ("XI",    5/2, "+", 4),
-    ("XII",  -5/2, "-", -1),
-    ("XIII", -3/2, "-", 0),
-    ("XIV",  -1/2, "-", 1),
-    ("XV",    1/2, "-", 2),
-    ("XVI",   3/2, "-", 3),
-]
-
-# ==========================================
-# Energy positions (arbitrary units)
-# scaled to match paper visual
-# ==========================================
-
-# J=1 base energy
-E_J1 = 0.0
-
-# J=2 base energy (0.57 THz above J=1)
-E_J2 = 4.0
-
-# Zeeman splitting within each manifold
-# 26.1 kHz for J=1, 37.6 kHz for J=2
-# (scaled for visualization)
-
-zeeman_J1 = 0.12   # scaled
-zeeman_J2 = 0.15   # scaled
-
-# xi split (+ above -, small offset)
-xi_split = 0.05
-
-
-def get_energy(J, m, xi):
-    if J == 1:
-        E = E_J1 + m * zeeman_J1
-    else:
-        E = E_J2 + m * zeeman_J2
-
-    if xi == "+":
-        E += xi_split
-    else:
-        E -= xi_split
-
-    return E
-
-
-# ==========================================
-# Build state positions
-# ==========================================
-
-state_positions = {}
-
-for label, m, xi, xpos in J1_states:
-    E = get_energy(1, m, xi)
-    state_positions[label] = {
-        "m": m, "xi": xi,
-        "E": E, "J": 1,
-        "x": m
-    }
-
-for label, m, xi, xpos in J2_states:
-    E = get_energy(2, m, xi)
-    state_positions[label] = {
-        "m": m, "xi": xi,
-        "E": E, "J": 2,
-        "x": m
-    }
-
-# ==========================================
-# Pulse definitions (Table S2)
-# Red arrows 1-9: concentrate population
-# Blue arrows 10-13: cross-J transitions
-# ==========================================
-
-# Format: (from_label, to_label, pulse_num)
-
-red_pulses = [
-    ("I",    "VII",   1),
-    ("II",   "VIII",  2),
-    ("III",  "IX",    3),
-    ("IV",   "VII",   4),
-    ("XII",  "XII",   5),   # self (flip spin)
-    ("IV",   "V",     6),
-    ("X",    "X",     7),   # self (flip spin)
-    ("XI",   "XI",    8),   # self (flip spin)
-    ("VI",   "XI",    9),
-]
-
-blue_pulses = [
-    ("IV",   "V",    10),
-    ("V",    "IV",   11),
-    ("XII",  "XIII", 12),
-    ("XIII", "XII",  13),
-]
-
-# ==========================================
-# Plot
-# ==========================================
-
-fig, ax = plt.subplots(figsize=(7, 6))
-
-level_len = 0.35
+fig, ax = plt.subplots(figsize=(8, 6))
 
 # ------------------------------------------
-# Draw energy levels
+# Energy positions
 # ------------------------------------------
 
-for label, info in state_positions.items():
+E_J1_plus  = 1.0
+E_J1_minus = 0.7
+E_J2_plus  = 4.2
+E_J2_minus = 3.9
 
-    x   = info["x"]
-    E   = info["E"]
-    xi  = info["xi"]
+level_len  = 0.35
+x_spacing  = 1.0
 
-    color = "black"
+# ------------------------------------------
+# J=1 states
+# m values: -3/2, -1/2, 1/2, 3/2
+# ------------------------------------------
 
+J1_m_vals = [-3/2, -1/2, 1/2, 3/2]
+
+# State labels from paper
+# xi=+: I, II, III  (m=-3/2,-1/2,1/2)
+# xi=-: IV, V, VI   (m=-3/2,-1/2,1/2)
+
+J1_plus_labels  = {-3/2: "I",   -1/2: "II",  1/2: "III"}
+J1_minus_labels = {-3/2: "IV",  -1/2: "V",   1/2: "VI"}
+
+# ------------------------------------------
+# J=2 states
+# m values: -5/2, -3/2, -1/2, 1/2, 3/2, 5/2
+# ------------------------------------------
+
+J2_m_vals = [-5/2, -3/2, -1/2, 1/2, 3/2, 5/2]
+
+J2_plus_labels  = {
+    -3/2: "VII", -1/2: "VIII", 1/2: "IX",
+     3/2: "X",    5/2: "XI"
+}
+
+J2_minus_labels = {
+    -5/2: "XII",  -3/2: "XIII", -1/2: "XIV",
+     1/2: "XV",    3/2: "XVI"
+}
+
+# ------------------------------------------
+# Draw levels and collect positions
+# ------------------------------------------
+
+positions = {}
+
+def draw_level(ax, m, E, label, color="black"):
+    x = m * x_spacing
     ax.plot(
         [x - level_len/2, x + level_len/2],
         [E, E],
         color=color,
-        linewidth=1.5,
-        solid_capstyle="round"
+        linewidth=2.0,
+        solid_capstyle="round",
+        zorder=3
     )
-
     ax.text(
-        x,
-        E + 0.04,
+        x, E + 0.06,
         label,
-        ha="center",
-        va="bottom",
-        fontsize=5.5,
-        color="black"
+        ha="center", va="bottom",
+        fontsize=6, color="black"
     )
+    positions[label] = (x, E)
+
+# J=1 xi=+
+for m, lbl in J1_plus_labels.items():
+    draw_level(ax, m, E_J1_plus, lbl)
+
+# J=1 xi=-
+for m, lbl in J1_minus_labels.items():
+    draw_level(ax, m, E_J1_minus, lbl)
+
+# J=2 xi=+
+for m, lbl in J2_plus_labels.items():
+    draw_level(ax, m, E_J2_plus, lbl)
+
+# J=2 xi=-
+for m, lbl in J2_minus_labels.items():
+    draw_level(ax, m, E_J2_minus, lbl)
 
 # ------------------------------------------
-# Draw red arrows (pulses 1-9)
+# Draw arrows
 # ------------------------------------------
 
-for (from_l, to_l, pnum) in red_pulses:
+def draw_arrow(ax, from_lbl, to_lbl,
+               color, pnum, style="->",
+               offset=(0.05, 0)):
 
-    if from_l not in state_positions:
-        continue
-    if to_l not in state_positions:
-        continue
+    if from_lbl not in positions:
+        return
+    if to_lbl not in positions:
+        return
 
-    x0 = state_positions[from_l]["x"]
-    y0 = state_positions[from_l]["E"]
-    x1 = state_positions[to_l]["x"]
-    y1 = state_positions[to_l]["E"]
+    x0, y0 = positions[from_lbl]
+    x1, y1 = positions[to_lbl]
 
     ax.annotate(
         "",
         xy=(x1, y1),
         xytext=(x0, y0),
         arrowprops=dict(
-            arrowstyle="->",
-            color="red",
-            lw=1.2,
-        )
+            arrowstyle=style,
+            color=color,
+            lw=1.3,
+            shrinkA=4,
+            shrinkB=4,
+        ),
+        zorder=2
     )
 
-    # pulse number label
-    xm = (x0 + x1) / 2
-    ym = (y0 + y1) / 2
+    xm = (x0 + x1) / 2 + offset[0]
+    ym = (y0 + y1) / 2 + offset[1]
 
     ax.text(
-        xm + 0.05,
-        ym,
+        xm, ym,
         str(pnum),
-        fontsize=6,
-        color="red",
+        fontsize=7,
+        color=color,
         ha="left",
-        va="center"
+        va="center",
+        fontweight="bold"
     )
 
-# ------------------------------------------
-# Draw blue arrows (pulses 10-13)
-# ------------------------------------------
+# Red arrows (pulses 1-9): J=1 -> J=2
+draw_arrow(ax, "I",   "VII",  "red",  1)
+draw_arrow(ax, "II",  "VIII", "red",  2)
+draw_arrow(ax, "III", "IX",   "red",  3)
+draw_arrow(ax, "IV",  "VII",  "red",  4, offset=(-0.15, 0))
+draw_arrow(ax, "XII", "XII",  "red",  5)
+draw_arrow(ax, "VI",  "XI",   "red",  9)
 
-for (from_l, to_l, pnum) in blue_pulses:
-
-    if from_l not in state_positions:
-        continue
-    if to_l not in state_positions:
-        continue
-
-    x0 = state_positions[from_l]["x"]
-    y0 = state_positions[from_l]["E"]
-    x1 = state_positions[to_l]["x"]
-    y1 = state_positions[to_l]["E"]
-
-    ax.annotate(
-        "",
-        xy=(x1, y1),
-        xytext=(x0, y0),
-        arrowprops=dict(
-            arrowstyle="<->",
-            color="blue",
-            lw=1.2,
-        )
-    )
-
-    xm = (x0 + x1) / 2
-    ym = (y0 + y1) / 2
-
-    ax.text(
-        xm + 0.05,
-        ym,
-        str(pnum),
-        fontsize=6,
-        color="blue",
-        ha="left",
-        va="center"
-    )
+# Blue arrows (pulses 10-13): horizontal within J
+draw_arrow(ax, "IV",  "V",   "blue", 10, style="<->")
+draw_arrow(ax, "V",   "IV",  "blue", 11, style="<->",
+           offset=(-0.15, -0.08))
+draw_arrow(ax, "XII", "XIII","blue", 12, style="<->")
+draw_arrow(ax, "XIII","XII", "blue", 13, style="<->",
+           offset=(-0.15, -0.08))
 
 # ------------------------------------------
-# xi labels (+/-)
+# xi labels
+# ------------------------------------------
+
+x_xi = 3.2 * x_spacing
+
+ax.text(x_xi, E_J1_plus,  "+", fontsize=11,
+        va="center", ha="left")
+ax.text(x_xi, E_J1_minus, "−", fontsize=11,
+        va="center", ha="left")
+ax.text(x_xi, E_J2_plus,  "+", fontsize=11,
+        va="center", ha="left")
+ax.text(x_xi, E_J2_minus, "−", fontsize=11,
+        va="center", ha="left")
+
+# ------------------------------------------
+# J labels
 # ------------------------------------------
 
 ax.text(
-    5.5, E_J1 + xi_split,
-    "+", fontsize=10,
-    color="black", va="center"
+    -3.2 * x_spacing, (E_J1_plus + E_J1_minus)/2,
+    "J=1", fontsize=11, fontweight="bold",
+    va="center", ha="right"
 )
 
 ax.text(
-    5.5, E_J1 - xi_split,
-    "−", fontsize=10,
-    color="black", va="center"
-)
-
-ax.text(
-    5.5, E_J2 + xi_split,
-    "+", fontsize=10,
-    color="black", va="center"
-)
-
-ax.text(
-    5.5, E_J2 - xi_split,
-    "−", fontsize=10,
-    color="black", va="center"
+    -3.2 * x_spacing, (E_J2_plus + E_J2_minus)/2,
+    "J=2", fontsize=11, fontweight="bold",
+    va="center", ha="right"
 )
 
 # ------------------------------------------
-# J labels and energy annotations
+# 0.57 THz gap
 # ------------------------------------------
 
-ax.text(
-    -2.5, E_J1,
-    "J=1", fontsize=10,
-    fontweight="bold",
-    va="center"
-)
+x_gap = -2.8 * x_spacing
 
-ax.text(
-    -2.5, E_J2,
-    "J=2", fontsize=10,
-    fontweight="bold",
-    va="center"
-)
-
-# Energy gap annotation
 ax.annotate(
     "",
-    xy=(-2.0, E_J2 - 0.3),
-    xytext=(-2.0, E_J1 + 0.3),
+    xy=(x_gap, E_J2_minus - 0.1),
+    xytext=(x_gap, E_J1_plus + 0.1),
     arrowprops=dict(
         arrowstyle="<->",
-        color="blue",
-        lw=1.5
+        color="black",
+        lw=1.2
     )
 )
 
 ax.text(
-    -1.8,
-    (E_J1 + E_J2) / 2,
+    x_gap + 0.1,
+    (E_J1_plus + E_J2_minus) / 2,
     "0.57 THz",
-    fontsize=8,
-    color="blue",
-    va="center"
+    fontsize=8, va="center"
 )
 
+# ------------------------------------------
 # Zeeman splitting annotations
+# ------------------------------------------
+
+x_zm = 3.8 * x_spacing
+
+# J=2
 ax.annotate(
     "",
-    xy=(4.8, E_J2 + zeeman_J2 * 2.5 + xi_split),
-    xytext=(4.8, E_J2 - xi_split),
+    xy=(x_zm, E_J2_plus + 0.05),
+    xytext=(x_zm, E_J2_minus - 0.05),
     arrowprops=dict(
         arrowstyle="<->",
-        color="black",
-        lw=1.0
+        color="black", lw=1.0
     )
 )
 
 ax.text(
-    5.0,
-    E_J2 + zeeman_J2 * 1.2,
+    x_zm + 0.1,
+    (E_J2_plus + E_J2_minus)/2,
     "37.6 kHz",
-    fontsize=7,
-    va="center"
+    fontsize=7, va="center"
 )
 
+# J=1
 ax.annotate(
     "",
-    xy=(4.0, E_J1 + zeeman_J1 * 1.5 + xi_split),
-    xytext=(4.0, E_J1 - xi_split),
+    xy=(x_zm, E_J1_plus + 0.05),
+    xytext=(x_zm, E_J1_minus - 0.05),
     arrowprops=dict(
         arrowstyle="<->",
-        color="black",
-        lw=1.0
+        color="black", lw=1.0
     )
 )
 
 ax.text(
-    4.2,
-    E_J1 + zeeman_J1 * 0.7,
+    x_zm + 0.1,
+    (E_J1_plus + E_J1_minus)/2,
     "26.1 kHz",
-    fontsize=7,
-    va="center"
+    fontsize=7, va="center"
 )
 
 # ------------------------------------------
-# m axis labels
+# B field
 # ------------------------------------------
 
-ax.set_xlabel("m", fontsize=10)
-
-m_ticks_J1 = [-3/2, -1/2, 1/2, 3/2]
-m_ticks_J2 = [-5/2, -3/2, -1/2, 1/2, 3/2, 5/2]
-
-ax.set_xticks(
-    sorted(set(m_ticks_J1 + m_ticks_J2))
+ax.text(
+    1.5 * x_spacing, 5.0,
+    "B = 0.36 mT",
+    fontsize=9, style="italic"
 )
+
+# ------------------------------------------
+# m axis
+# ------------------------------------------
+
+m_ticks = [-5/2, -3/2, -1/2, 1/2, 3/2, 5/2]
+
+ax.set_xticks([m * x_spacing for m in m_ticks])
 
 ax.set_xticklabels([
     "−5/2", "−3/2", "−1/2",
     "1/2",  "3/2",  "5/2"
-], fontsize=8)
+], fontsize=9)
 
-# ------------------------------------------
-# B field annotation
-# ------------------------------------------
-
-ax.text(
-    3.5, E_J2 + 0.8,
-    "B = 0.36 mT",
-    fontsize=8,
-    style="italic"
-)
-
-# ------------------------------------------
-# Clean up axes
-# ------------------------------------------
-
-ax.set_ylabel("E", fontsize=10)
+ax.set_xlabel("m", fontsize=11)
+ax.set_ylabel("E (not to scale)", fontsize=10)
 ax.set_yticks([])
+
 ax.spines["top"].set_visible(False)
 ax.spines["right"].set_visible(False)
 ax.spines["left"].set_visible(False)
 
-ax.set_xlim(-3, 6.5)
-ax.set_ylim(-0.8, 5.5)
+ax.set_xlim(-3.5 * x_spacing, 4.5 * x_spacing)
+ax.set_ylim(0.2, 5.2)
 
 plt.tight_layout()
-plt.savefig("fig2a.png", dpi=300)
+plt.savefig("fig2a.png", dpi=300, bbox_inches="tight")
 plt.show()
 
 print("Fig. 2a guardada.", flush=True)
