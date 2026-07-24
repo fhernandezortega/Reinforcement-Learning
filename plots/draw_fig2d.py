@@ -1,331 +1,170 @@
+import sys
+import os
+
+sys.path.append(
+    os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..")
+    )
+)
+
+import torch
+import numpy as np
 import json
-import matplotlib.pyplot as plt
-import networkx as nx
+
+from env.rlqls_env_cah import RLQLSEnvCaH
+from rl.dqn import QNetwork          # <-- era 'DQN' (no existe)
 
 
 # ==========================================
-# Cargar árbol
+# Rutas robustas
 # ==========================================
 
-with open("tree_data_structured.json", "r") as f:
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, ".."))
 
-    tree = json.load(f)
+def find_file(name):
+    for d in (HERE, ROOT, os.getcwd()):
+        p = os.path.join(d, name)
+        if os.path.exists(p):
+            return p
+    return os.path.join(ROOT, name)
 
-
-# ==========================================
-# Grafo dirigido
-# ==========================================
-
-G = nx.DiGraph()
-
-node_counter = 0
-
-# posiciones manuales tipo paper
-positions = {}
-
-# separación horizontal/vertical
-DX = 1.8
-DY = 1.3
-
-# podar ramas pequeñas
-MIN_BRANCH_PROB = 0.05
+MODEL_PATH = find_file("dqn_cah_model.pt")
+JSON_PATH  = os.path.join(HERE, "tree_data_structured.json")
 
 
 # ==========================================
-# Función recursiva
+# Parametros
 # ==========================================
 
-def add_tree(
-    node,
-    parent=None,
-    edge_label="",
-    x=0,
-    y=0
-):
+MAX_DEPTH        = 12
+PURITY_THRESHOLD = 0.99
 
-    global node_counter
 
-    prob = node["probability"]
+# ==========================================
+# Environment
+# ==========================================
 
-    # --------------------------------------
-    # Ignorar ramas muy pequeñas
-    # --------------------------------------
+env = RLQLSEnvCaH(T=300.0, purity_threshold=PURITY_THRESHOLD)
+print(f"Estados: {env.n_states} | Acciones: {env.n_actions}", flush=True)
 
-    if prob < MIN_BRANCH_PROB:
-        return None
 
-    current = node_counter
-    node_counter += 1
+# ==========================================
+# Modelo entrenado
+# ==========================================
 
-    # --------------------------------------
-    # Nodo terminal
-    # --------------------------------------
+ckpt = torch.load(MODEL_PATH, map_location="cpu", weights_only=False)
+model = QNetwork(n_states=env.n_states, n_actions=env.n_actions)
+if isinstance(ckpt, dict) and "q_online" in ckpt:
+    model.load_state_dict(ckpt["q_online"])
+else:
+    model.load_state_dict(ckpt)
+model.eval()
+print(f"Modelo cargado: {MODEL_PATH}", flush=True)
 
-    if node["type"] == "terminal":
 
-        label = f"{node['terminal_state']}"
+# ==========================================
+# Expansion recursiva del arbol
+# ==========================================
 
-        node_color = "#D9D9D9"
+def expand_tree(state, depth, branch_probability, branch_prob_local, history):
 
-        edge_color = "gray"
+    purity = float(np.max(state))
 
-        size = 900
+    # Estado terminal
+    if purity >= PURITY_THRESHOLD:
+        return {
+            "type": "terminal",
+            "depth": depth,
+            "probability": branch_probability,
+            "branch_prob": branch_prob_local,
+            "terminal_state": int(np.argmax(state)),
+            "purity": purity,
+            "history": history,
+        }
 
-    # --------------------------------------
-    # Nodo normal
-    # --------------------------------------
+    # Limite de profundidad (no terminal -> lo marcamos)
+    if depth >= MAX_DEPTH:
+        return {
+            "type": "cutoff",
+            "depth": depth,
+            "probability": branch_probability,
+            "branch_prob": branch_prob_local,
+            "purity": purity,
+            "history": history,
+        }
 
-    else:
+    # Inferencia greedy
+    with torch.no_grad():
+        state_t  = torch.as_tensor(state, dtype=torch.float32)
+        q_values = model(state_t)
+        action   = int(torch.argmax(q_values).item())
 
-        label = f"{node['action']}"
+    pulse = env.ACTIONS[action]
+    A0, A1 = env.get_transition_matrices(action)
 
-        node_color = "white"
+    s0 = A0 @ state
+    s1 = A1 @ state
+    p0 = float(np.sum(s0))
+    p1 = float(np.sum(s1))
 
-        edge_color = "red"
+    if p0 > 1e-12:
+        s0 = s0 / p0
+    if p1 > 1e-12:
+        s1 = s1 / p1
 
-        size = 700
+    node = {
+        "type": "node",
+        "depth": depth,
+        "probability": branch_probability,
+        "branch_prob": branch_prob_local,
+        "action": action + 1,
+        "pulse_label": pulse["label"],
+        "p(k=0)": p0,
+        "p(k=1)": p1,
+        "purity": purity,
+        "history": history,
+        "children": {},
+    }
 
-    # --------------------------------------
-    # Guardar nodo
-    # --------------------------------------
-
-    G.add_node(
-        current,
-        label=label,
-        color=node_color,
-        edge=edge_color,
-        prob=prob,
-        size=size
-    )
-
-    positions[current] = (x, y)
-
-    # --------------------------------------
-    # Conectar con padre
-    # --------------------------------------
-
-    if parent is not None:
-
-        G.add_edge(
-            parent,
-            current,
-            label=edge_label,
-            prob=prob
+    if p0 > 1e-8:
+        child0 = expand_tree(
+            s0, depth + 1, branch_probability * p0, p0,
+            history + [{"action": action + 1, "measurement": "k=0", "probability": p0}]
         )
+        if child0:
+            node["children"]["k=0"] = child0
 
-    # --------------------------------------
-    # Hijos
-    # --------------------------------------
+    if p1 > 1e-8:
+        child1 = expand_tree(
+            s1, depth + 1, branch_probability * p1, p1,
+            history + [{"action": action + 1, "measurement": "k=1", "probability": p1}]
+        )
+        if child1:
+            node["children"]["k=1"] = child1
 
-    if node["type"] == "node":
-
-        children = node.get("children", {})
-
-        # k = 0 (negro, arriba)
-        if "k=0" in children:
-
-            add_tree(
-                children["k=0"],
-                current,
-                "k=0",
-                x + DX,
-                y + DY
-            )
-
-        # k = 1 (azul, abajo)
-        if "k=1" in children:
-
-            add_tree(
-                children["k=1"],
-                current,
-                "k=1",
-                x + DX,
-                y - DY
-            )
-
-    return current
+    return node
 
 
 # ==========================================
-# Construir árbol
+# Estado inicial FIJO (determinista)
+# Mezcla uniforme J=1 -> arbol reproducible
 # ==========================================
 
-add_tree(
-    tree,
-    x=0,
-    y=0
+initial_state = np.zeros(env.n_states, dtype=np.float32)
+for i in range(6):
+    initial_state[i] = 1.0 / 6.0
+
+print("Construyendo arbol...", flush=True)
+tree_root = expand_tree(
+    state=initial_state,
+    depth=0,
+    branch_probability=1.0,
+    branch_prob_local=1.0,
+    history=[],
 )
 
+with open(JSON_PATH, "w") as f:
+    json.dump(tree_root, f, indent=2)
 
-# ==========================================
-# Figura
-# ==========================================
-
-plt.figure(figsize=(13, 8))
-
-
-# ==========================================
-# Dibujar edges
-# ==========================================
-
-for u, v, data in G.edges(data=True):
-
-    color = (
-        "black"
-        if data["label"] == "k=0"
-        else "deepskyblue"
-    )
-
-    nx.draw_networkx_edges(
-        G,
-        positions,
-        edgelist=[(u, v)],
-        edge_color=color,
-        width=1.8,
-        arrows=True,
-        arrowsize=18
-    )
-
-
-# ==========================================
-# Dibujar nodos
-# ==========================================
-
-for n in G.nodes():
-
-    nx.draw_networkx_nodes(
-
-        G,
-        positions,
-
-        nodelist=[n],
-
-        node_color=G.nodes[n]["color"],
-
-        edgecolors=G.nodes[n]["edge"],
-
-        linewidths=1.5,
-
-        node_size=G.nodes[n]["size"]
-    )
-
-
-# ==========================================
-# Labels nodos
-# ==========================================
-
-labels = {
-
-    n: G.nodes[n]["label"]
-
-    for n in G.nodes()
-}
-
-nx.draw_networkx_labels(
-
-    G,
-    positions,
-
-    labels,
-
-    font_size=10
-)
-
-
-# ==========================================
-# Probabilidades
-# ==========================================
-
-for u, v, data in G.edges(data=True):
-
-    x1, y1 = positions[u]
-    x2, y2 = positions[v]
-
-    xm = (x1 + x2) / 2
-    ym = (y1 + y2) / 2
-
-    color = (
-        "black"
-        if data["label"] == "k=0"
-        else "deepskyblue"
-    )
-
-    plt.text(
-        xm,
-        ym + 0.12,
-        f"{data['prob']:.2f}",
-        fontsize=10,
-        color=color,
-        fontweight="bold"
-    )
-
-
-# ==========================================
-# Leyenda estilo paper
-# ==========================================
-
-plt.text(
-    -0.5,
-    4.5,
-    r"$k=0$",
-    fontsize=13,
-    color="black"
-)
-
-plt.text(
-    0.2,
-    4.5,
-    "⟶",
-    fontsize=13,
-    color="black"
-)
-
-plt.text(
-    1.0,
-    4.5,
-    "termination",
-    fontsize=11,
-    color="black"
-)
-
-plt.text(
-    -0.5,
-    3.9,
-    r"$k=1$",
-    fontsize=13,
-    color="deepskyblue"
-)
-
-plt.text(
-    0.2,
-    3.9,
-    "⟶",
-    fontsize=13,
-    color="deepskyblue"
-)
-
-
-# ==========================================
-# Estilo final
-# ==========================================
-
-plt.title(
-    "Fig. 2(d) RL-QLS Decision Tree",
-    fontsize=16
-)
-
-plt.axis("off")
-
-plt.tight_layout()
-
-plt.savefig(
-    "fig2d_tree.png",
-    dpi=300,
-    bbox_inches="tight"
-)
-
-print(
-    "Figura guardada como fig2d_tree.png"
-)
-
-plt.show()
+print(f"Arbol guardado: {JSON_PATH}", flush=True)

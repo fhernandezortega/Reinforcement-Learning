@@ -1,385 +1,168 @@
 """
-CaH+ Pulse Library — Sec. SB / Table S2
-=========================================
-Dos clases disponibles:
+pulses_cah.py — Biblioteca de pulsos Raman CaH+ (Tabla S2) sobre QuTiP.
+======================================================================
+Adaptado para el nuevo Hamiltoniano en AUTOBASE |J,m,xi> (I..XVI).
 
-  CaHPulse      — implementacion original con QuTiP TDSE (numerica)
-  PulseLibrary  — interfaz simplificada con pulsos pi ideales
-                  (requerida por Dynamics.py y rlqls_env_cah.py)
+- Las tasas Omega, frecuencias f y duraciones D vienen DIRECTO de la Tabla S2
+  (no se recalculan).
+- Los estados se expresan en la autobase (J, m, xi), no en base producto.
+- Regla fisica: ΔJ=0, Δm=±1 (Chou: los pulsos no cambian J).
+- Evolucion Schrodinger con QuTiP en el espacio mol x {k=0,1}, frame rotante,
+  H0 completo -> detunings reales de todos los estados (fuga off-resonante).
+- Salida: matrices A0, A1 (Ec. 4b), columna-estocasticas.
 
-Importaciones validas:
-  from physics.pulses_cah import CaHPulse
-  from physics.pulses_cah import PulseLibrary
-  from physics.pulses_cah import PulseLibrary, Pulse, LAMBDA_LD, NU_MOT_HZ
+Unidades internas: rad/s y s. No depende de physics.units.
 """
-
-import sys
-import os
-
-sys.path.append(
-    os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-)
-
 import numpy as np
 import qutip as qt
-from dataclasses import dataclass, field
-from typing import List, Tuple, Optional
 
-# Import correcto segun estructura del proyecto
 try:
-    from physics.hamiltonian_cah import CaHHamiltonian, MolecularConstants
-except ImportError:
-    from hamiltonian_cah import CaHHamiltonian, MolecularConstants
+    from physics.hamiltonian_cah import CaHHamiltonian      # repo
+except ModuleNotFoundError:
+    from hamiltonian_cah import CaHHamiltonian              # local
 
+LAMBDA_LD = 0.09
+NU_MOT_HZ = 5.164e6
 
-# ══════════════════════════════════════════════════════════════════════
-# Constantes globales (usadas por Dynamics.py)
-# ══════════════════════════════════════════════════════════════════════
-
-LAMBDA_LD  = 0.09
-NU_MOT_HZ  = 5.164e6
-OMEGA_MOT  = 2 * np.pi * NU_MOT_HZ
-HBAR       = 1.054571817e-34
-
-# QuTiP 5: opciones como dict (QuTiP 4 usaba qt.Options)
-OPTIONS_INTRA = {"atol": 1e-8, "rtol": 1e-6, "nsteps": 100_000}
-OPTIONS_INTER = {"atol": 1e-6, "rtol": 1e-4, "nsteps": 100_000}
-
-a_mot  = qt.destroy(2)
-ad_mot = qt.create(2)
-
-
-# ══════════════════════════════════════════════════════════════════════
-# Tabla S2
-# ══════════════════════════════════════════════════════════════════════
-
+# ============================================================
+# TABLA S2  (tal cual del paper) + mapeo a autoestados (J,m,xi)
+#   f_kHz : frecuencia de la transicion (columna f de la Tabla S2)
+#   D_2pi : duracion en unidades 2pi^-1 ms  (D_real_ms = D_2pi / 2pi)
+#   trans : lista de (estado_A, estado_B, Omega_kHz)
+#           el par es no-ordenado; la direccion i->f se fija por signo de f
+# ============================================================
 PULSE_TABLE = [
-    ( 1,  1, -1, -0.5,  2, -2,  0.5,  -1.72,  2.156, 16.2, "inter"),
-    ( 2,  1, -1,  0.5,  2, -2, -0.5,  -1.44,  1.008, 34.6, "inter"),
-    ( 3,  1,  0, -0.5,  2, -1,  0.5,  -1.03,  0.621, 52.6, "inter"),
-    ( 4,  1,  0,  0.5,  2, -1, -0.5,  -0.23,  1.881, 18.7, "inter"),
-    ( 5,  2, -2, -0.5,  2, -2,  0.5,   4.40,  1.223, 28.5, "intra"),
-    ( 6,  1, -1, -0.5,  1, -1,  0.5,  26.13,  1.174, 29.7, "intra"),
-    ( 7,  2,  1, -0.5,  2,  1,  0.5,  -6.12,  2.097, 16.6, "intra"),
-    ( 8,  2,  2, -0.5,  2,  2,  0.5,  -6.56,  0.621, 56.2, "intra"),
-    ( 9,  1,  1, -0.5,  2,  0,  0.5,  -7.33,  1.221, 23.7, "inter"),
-    (10,  1, -1, -0.5,  1,  0,  0.5,   9.87,  2.078, 16.8, "intra"),
-    (11,  1,  0, -0.5,  1, -1,  0.5,  -9.87,  2.078, 16.8, "intra"),
-    (12,  2, -2, -0.5,  2, -1,  0.5,  13.13,  1.852, 18.8, "intra"),
-    (13,  2, -1, -0.5,  2, -2,  0.5, -13.13,  1.852, 18.8, "intra"),
+    dict(id=1,  f_kHz=-1.72, D_2pi=16.2,
+         trans=[((2, 2.5,'+'), (2, 1.5,'+'), 2.156)]),
+    dict(id=2,  f_kHz=-1.44, D_2pi=34.6,
+         trans=[((2, 1.5,'+'), (2, 0.5,'+'), 1.008)]),
+    dict(id=3,  f_kHz=-1.03, D_2pi=52.6,
+         trans=[((1, 1.5,'+'), (1, 0.5,'+'), 2.138),
+                ((2, 0.5,'+'), (2,-0.5,'+'), 0.621)]),
+    dict(id=4,  f_kHz=-0.23, D_2pi=18.7,
+         trans=[((1, 0.5,'+'), (1,-0.5,'+'), 1.857),
+                ((2,-0.5,'+'), (2,-1.5,'+'), 1.881)]),
+    dict(id=5,  f_kHz= 4.40, D_2pi=28.5,
+         trans=[((2,-1.5,'+'), (2,-2.5,'-'), 1.223)]),
+    dict(id=6,  f_kHz=26.13, D_2pi=29.7,
+         trans=[((1, 0.5,'-'), (1,-0.5,'+'), 1.174)]),
+    dict(id=7,  f_kHz=-6.12, D_2pi=16.6,
+         trans=[((2, 1.5,'-'), (2, 0.5,'-'), 2.097)]),
+    dict(id=8,  f_kHz=-6.56, D_2pi=56.2,
+         trans=[((2, 0.5,'-'), (2,-0.5,'-'), 0.621)]),
+    dict(id=9,  f_kHz=-7.33, D_2pi=23.7,
+         trans=[((1, 0.5,'-'), (1,-0.5,'-'), 1.857),
+                ((2,-0.5,'-'), (2,-1.5,'-'), 1.221)]),
+    dict(id=10, f_kHz= 9.87, D_2pi=16.8,
+         trans=[((1,-1.5,'-'), (1,-0.5,'-'), 2.078)]),
+    dict(id=11, f_kHz=-9.87, D_2pi=16.8,
+         trans=[((1,-1.5,'-'), (1,-0.5,'-'), 2.078)]),
+    dict(id=12, f_kHz=13.13, D_2pi=18.8,
+         trans=[((2,-2.5,'-'), (2,-1.5,'-'), 1.852)]),
+    dict(id=13, f_kHz=-13.13, D_2pi=18.8,
+         trans=[((2,-2.5,'-'), (2,-1.5,'-'), 1.852)]),
 ]
 
-MULTI_COMPONENTS = {
-    3: (1, +1, -0.5, 2, -1, +0.5, 2.138),
-    9: (1, +1, +0.5, 2, +1, +0.5, 1.857),
-}
 
+class CaHPulses:
 
-# ══════════════════════════════════════════════════════════════════════
-# Dataclasses requeridas por Dynamics.py
-# ══════════════════════════════════════════════════════════════════════
+    LAMBDA_LD = LAMBDA_LD
 
-@dataclass
-class SingleTransition:
-    src_eig:   int
-    tgt_eig:   int
-    rabi_freq: float
-    src_label: str = ""
-    tgt_label: str = ""
+    def __init__(self, ham=None):
+        self.ham    = ham or CaHHamiltonian()
+        self.N      = self.ham.n_states
+        self.E_hz   = self.ham.energies_hz          # Hz, autobase I..XVI
+        self.labels = self.ham.eig_labels           # [(J,m,xi), ...]
+        self.nu_mot = NU_MOT_HZ
+        self.pulse_library = self._build_pulse_library()
 
+    # ---- utilidades ----
+    def _idx(self, label):
+        J, m, xi = label
+        return self.labels.index((J, float(m), xi))
 
-@dataclass
-class Pulse:
-    index:       int
-    table_id:    Optional[int]
-    transitions: List[SingleTransition]
-    duration_ms: float
-    delta_J:     int
-    delta_mJ:    int
-    pulse_type:  str = "inter"
+    def _order_if(self, A, B, f_kHz):
+        """Devuelve (i,f) tal que E_f - E_i tenga el signo de f_kHz (direccion BSB)."""
+        ia, ib = self._idx(A), self._idx(B)
+        dE = (self.E_hz[ib] - self.E_hz[ia]) / 1e3   # kHz
+        return (ia, ib) if np.sign(dE) == np.sign(f_kHz) else (ib, ia)
 
-    @property
-    def n_transitions(self): return len(self.transitions)
+    def _build_pulse_library(self):
+        lib = []
+        for p in PULSE_TABLE:
+            D_s = p["D_2pi"] * 1e-3 / (2 * np.pi)         # s (Tabla S2)
+            couplings = []
+            dE_list = []
+            for (A, B, Om_kHz) in p["trans"]:
+                i, f = self._order_if(A, B, p["f_kHz"])
+                couplings.append((i, f, Om_kHz * 1e3))    # (i, f, Omega_Hz)
+                dE_list.append(self.E_hz[f] - self.E_hz[i])
+            # laser sintonizado a la energia REAL del Hamiltoniano:
+            # BSB con frecuencia = promedio de las transiciones (nota Tabla S2)
+            f_L = self.nu_mot + float(np.mean(dE_list))
+            lib.append(dict(id=p["id"], f_L=f_L, D_s=D_s,
+                            couplings=couplings, f_kHz=p["f_kHz"]))
+        return lib
 
-    @property
-    def label(self):
-        main   = self.transitions[0]
-        suffix = f" (+{self.n_transitions-1} mas)" if self.n_transitions > 1 else ""
-        return (f"Pulse {self.table_id or '?':>2}: "
-                f"{main.src_label} -> {main.tgt_label}{suffix}")
+    # ---- motor QuTiP (frame rotante, mol x {0,1}) ----
+    def _H_rot(self, couplings, f_L):
+        N = self.N
+        H = np.zeros((2 * N, 2 * N), dtype=complex)
+        tp = 2 * np.pi
+        E_ref = self.E_hz[couplings[0][0]]
+        for j in range(N):
+            H[j, j]         = tp * (self.E_hz[j] - E_ref)
+            H[N + j, N + j] = tp * (self.E_hz[j] + self.nu_mot - f_L - E_ref)
+        for (i, f, Om_hz) in couplings:
+            g = tp * (self.LAMBDA_LD * Om_hz) / 2.0
+            H[N + f, i] += g
+            H[i, N + f] += np.conj(g)
+        return H
 
-
-# ══════════════════════════════════════════════════════════════════════
-# PulseLibrary — interfaz requerida por Dynamics.py y rlqls_env_cah.py
-# ══════════════════════════════════════════════════════════════════════
-
-class PulseLibrary:
-    """
-    Libreria de pulsos pi BSB ideales para CaH+.
-
-    Construye objetos Pulse con SingleTransition compatibles con
-    IdealTransitionSolver en Dynamics.py.
-
-    Parameters
-    ----------
-    ham               : CaHHamiltonian (o CaHPlusHamiltonian, son el mismo)
-    use_table_s2_only : True = 13 pulsos Tabla S2 (paper)
-                        False = todos los permitidos por reglas E1
-    """
-
-    def __init__(self,
-                 ham,
-                 use_table_s2_only: bool = True):
-
-        self.ham               = ham
-        self.use_table_s2_only = use_table_s2_only
-        self.pulses: List[Pulse] = []
-
-        # Diagonalizar si no se ha hecho
-        if not hasattr(ham, 'energies') or ham.energies is None:
-            ham.diagonalize()
-
-        self.eig_energies = ham.energies
-        self.eigvecs      = ham.eigvecs
-
-        self._build()
-
-    # ─── Utilidades ──────────────────────────────────────────────────
-
-    def _best_eig(self, J: int, mJ: int, mI: float) -> int:
-        """Eigenestado con mayor solapamiento con |J,mJ,mI⟩."""
-        try:
-            unc = self.ham.basis.index((J, mJ, float(mI)))
-        except ValueError:
-            raise ValueError(f"Estado |{J},{mJ},{mI}> no encontrado en la base")
-        return int(np.argmax(np.abs(self.eigvecs[unc, :])))
-
-    def _eig_label(self, idx: int) -> str:
-        dom = int(np.argmax(np.abs(self.eigvecs[:, idx])))
-        J, mJ, mI = self.ham.basis[dom]
-        return f"|J={J},mJ={mJ:+d},mI={mI:+.1f}>"
-
-    def _duration_ms(self, omega_kHz: float) -> float:
-        return (np.pi / (LAMBDA_LD * 2*np.pi*omega_kHz*1e3)) * 1e3
-
-    # ─── Construccion ─────────────────────────────────────────────────
-
-    def _build(self):
-        # Agrupar Tabla S2 por table_id
-        groups = {}
-        for row in PULSE_TABLE:
-            tid = row[0]
-            groups.setdefault(tid, []).append(row)
-
-        covered = set()
-        idx = 0
-
-        for tid in sorted(groups.keys()):
-            rows = groups[tid]
-            transitions = []
-            D_ms    = rows[0][9]
-            dJ_main = rows[0][4] - rows[0][1]
-            dmJ_main= rows[0][5] - rows[0][2]
-            ptype   = "intra" if dJ_main == 0 else "inter"
-
-            for row in rows:
-                _, Ji, mJi, mIi, Jf, mJf, mIf, _, Om_kHz, _, _ = row
-                try:
-                    src = self._best_eig(Ji, mJi, mIi)
-                    tgt = self._best_eig(Jf, mJf, mIf)
-                except ValueError as e:
-                    print(f"  [Aviso] Pulso {tid}: {e}")
-                    continue
-
-                Om_rads = 2 * np.pi * Om_kHz * 1e3
-                transitions.append(SingleTransition(
-                    src_eig=src, tgt_eig=tgt, rabi_freq=Om_rads,
-                    src_label=self._eig_label(src),
-                    tgt_label=self._eig_label(tgt),
-                ))
-                covered.add((src, tgt))
-
-            # Agregar componente secundaria si existe
-            if tid in MULTI_COMPONENTS:
-                Ji2, mJi2, mIi2, Jf2, mJf2, mIf2, Om2_kHz = MULTI_COMPONENTS[tid]
-                try:
-                    src2 = self._best_eig(Ji2, mJi2, mIi2)
-                    tgt2 = self._best_eig(Jf2, mJf2, mIf2)
-                    Om2  = 2 * np.pi * Om2_kHz * 1e3
-                    transitions.append(SingleTransition(
-                        src_eig=src2, tgt_eig=tgt2, rabi_freq=Om2,
-                        src_label=self._eig_label(src2),
-                        tgt_label=self._eig_label(tgt2),
-                    ))
-                    covered.add((src2, tgt2))
-                except ValueError:
-                    pass
-
-            if transitions:
-                self.pulses.append(Pulse(
-                    index=idx, table_id=tid,
-                    transitions=transitions,
-                    duration_ms=D_ms,
-                    delta_J=dJ_main, delta_mJ=dmJ_main,
-                    pulse_type=ptype,
-                ))
-                idx += 1
-
-        # Auto-enumeracion si se pide
-        if not self.use_table_s2_only:
-            Om_rads = 2 * np.pi * 0.5e3   # 0.5 kHz por defecto
-            D_ms    = self._duration_ms(0.5)
-            for i, (Ji, mJi, mIi) in enumerate(self.ham.basis):
-                for j, (Jf, mJf, mIf) in enumerate(self.ham.basis):
-                    if abs(Jf - Ji) != 1: continue
-                    if abs(mJf - mJi) > 1: continue
-                    if abs(mIf - mIi) > 1e-9: continue
-                    if i == j: continue
-                    src = self._best_eig(Ji, mJi, mIi)
-                    tgt = self._best_eig(Jf, mJf, mIf)
-                    if (src, tgt) in covered: continue
-                    dJ  = Jf - Ji
-                    dmJ = mJf - mJi
-                    self.pulses.append(Pulse(
-                        index=idx, table_id=None,
-                        transitions=[SingleTransition(
-                            src_eig=src, tgt_eig=tgt, rabi_freq=Om_rads,
-                            src_label=self._eig_label(src),
-                            tgt_label=self._eig_label(tgt),
-                        )],
-                        duration_ms=D_ms,
-                        delta_J=dJ, delta_mJ=dmJ,
-                        pulse_type="intra" if dJ == 0 else "inter",
-                    ))
-                    covered.add((src, tgt))
-                    idx += 1
-
-    @property
-    def n_actions(self): return len(self.pulses)
-
-    def __repr__(self):
-        return (f"PulseLibrary({self.n_actions} pulsos, "
-                f"n_states={self.ham.n_states}, "
-                f"table_s2_only={self.use_table_s2_only})")
-
-
-# ══════════════════════════════════════════════════════════════════════
-# CaHPulse — implementacion original QuTiP (sin cambios funcionales)
-# ══════════════════════════════════════════════════════════════════════
-
-class CaHPulse:
-    """Implementacion original con QuTiP TDSE (para verificacion numerica)."""
-
-    def __init__(self, ham: CaHHamiltonian = None):
-        if ham is None:
-            ham = CaHHamiltonian()
-        self.ham      = ham
-        self.n_states = ham.n_states
-        self.energies, self.eigvecs = ham.diagonalize()
-        self._unc_idx = {state: i for i, state in enumerate(ham.basis)}
-        self._parse_pulses()
-
-    def _unc_to_eig(self, J, mJ, mI):
-        unc_idx  = self._unc_idx[(J, mJ, float(mI))]
-        overlaps = np.abs(self.eigvecs[unc_idx, :])
-        return int(np.argmax(overlaps))
-
-    def _eig_idx(self, J, mJ, mI):
-        return self._unc_to_eig(J, mJ, float(mI))
-
-    def _parse_pulses(self):
-        self.pulses = []
-        for row in PULSE_TABLE:
-            pid, Ji, mJi, mIi, Jf, mJf, mIf, f_kHz, Om_kHz, D_ms, ptype = row
-            i_eig = self._eig_idx(Ji, mJi, mIi)
-            f_eig = self._eig_idx(Jf, mJf, mIf)
-            Om    = 2 * np.pi * Om_kHz * 1e3
-            D_s   = D_ms * 1e-3
-            transitions = [(i_eig, f_eig, Om)]
-            if pid in MULTI_COMPONENTS:
-                Ji2, mJi2, mIi2, Jf2, mJf2, mIf2, Om2_kHz = MULTI_COMPONENTS[pid]
-                i2  = self._eig_idx(Ji2, mJi2, mIi2)
-                f2  = self._eig_idx(Jf2, mJf2, mIf2)
-                Om2 = 2 * np.pi * Om2_kHz * 1e3
-                transitions.append((i2, f2, Om2))
-            self.pulses.append({
-                "id": pid, "D_s": D_s, "type": ptype,
-                "transitions": transitions,
-                "label": f"Pulse {pid:2d}: |{Ji},{mJi:+d},{mIi:+.1f}>->|{Jf},{mJf:+d},{mIf:+.1f}>"
-            })
-
-    def precompute_matrices(self, verbose=True):
-        A0_list, A1_list = [], []
-        for pulse in self.pulses:
-            if verbose:
-                print(f"  {pulse['label']} ...", end="", flush=True)
-            A0, A1 = self._compute_one_TM(pulse)
-            A0_list.append(A0)
-            A1_list.append(A1)
-            if verbose:
-                cs = (A0+A1).sum(axis=0)
-                print(f" col-sum [{cs.min():.3f},{cs.max():.3f}]")
-        return A0_list, A1_list
-
-    def _build_Hint_coeff(self, transitions, t):
-        NS = self.n_states
-        H_terms = []
-        for (i_eig, f_eig, Om) in transitions:
-            Ei    = self.energies[i_eig]
-            Ef    = self.energies[f_eig]
-            delta = Ef - Ei
-            fi_op = qt.Qobj(np.outer(np.eye(NS)[f_eig], np.eye(NS)[i_eig]))
-            if_op = fi_op.dag()
-            H_carrier = qt.tensor(fi_op + if_op, qt.qeye(2))
-            H_terms.append([
-                H_carrier,
-                lambda t, args=None, Om=Om, delta=delta:
-                    0.5 * Om * np.cos(delta * t)
-            ])
-            H_sb_a = qt.tensor(fi_op - if_op, a_mot + ad_mot)
-            H_terms.append([
-                H_sb_a,
-                lambda t, args=None, Om=Om, delta=delta:
-                    -LAMBDA_LD * Om / 2.0 * np.sin((delta - OMEGA_MOT) * t)
-            ])
-        return H_terms
-
-    def _compute_one_TM(self, pulse):
-        NS   = self.n_states
-        D_s  = pulse["D_s"]
-        opts = OPTIONS_INTRA if pulse["type"] == "intra" else OPTIONS_INTER
-        H_terms = self._build_Hint_coeff(pulse["transitions"], D_s)
-        dt    = 1e-6
-        n_pts = max(int(D_s / dt) + 2, 10)
-        tlist = np.linspace(0, D_s, n_pts)
-        A0 = np.zeros((NS, NS))
-        A1 = np.zeros((NS, NS))
-        for l in range(NS):
-            psi0 = qt.tensor(qt.basis(NS, l), qt.basis(2, 0))
-            result = qt.sesolve(H_terms, psi0, tlist, options=opts)
-            arr = result.states[-1].full().flatten()
-            for j in range(NS):
-                A0[j, l] += np.abs(arr[j*2    ])**2
-                A1[j, l] += np.abs(arr[j*2 + 1])**2
+    def transition_matrices(self, pulse):
+        N = self.N
+        U = (-1j * qt.Qobj(self._H_rot(pulse["couplings"], pulse["f_L"]))
+             * pulse["D_s"]).expm().full()
+        A0 = np.abs(U[:N, :N]) ** 2
+        A1 = np.abs(U[N:, :N]) ** 2
         return A0, A1
 
+    def precompute_matrices(self):
+        A0_list, A1_list = [], []
+        for p in self.pulse_library:
+            A0, A1 = self.transition_matrices(p)
+            A0_list.append(A0)
+            A1_list.append(A1)
+        return A0_list, A1_list
 
-# ══════════════════════════════════════════════════════════════════════
-# Quick self-test
-# ══════════════════════════════════════════════════════════════════════
 
+# ======================= TEST =======================
 if __name__ == "__main__":
-    print("Construyendo Hamiltoniano...")
-    ham = CaHHamiltonian()
-    ham.diagonalize()
-    print(f"  {ham.n_states} estados")
+    P = CaHPulses()
+    rom = ['I','II','III','IV','V','VI','VII','VIII','IX','X',
+           'XI','XII','XIII','XIV','XV','XVI']
+    def name(k): 
+        J,m,xi = P.labels[k]; return f"{rom[k]}|{J},{m:+.1f},{xi}>"
 
-    print("\nPulseLibrary (Tabla S2):")
-    lib = PulseLibrary(ham, use_table_s2_only=True)
-    print(f"  {lib}")
-    for p in lib.pulses:
-        print(f"    {p.label}  D={p.duration_ms:.1f}ms")
+    print(f"Biblioteca: {len(P.pulse_library)} pulsos\n")
+    print(f"{'P':>2} {'f(kHz)':>7} {'D(ms)':>7}  transiciones i->f (Ω kHz) | p(k=1) primaria")
+    for p in P.pulse_library:
+        A0, A1 = P.transition_matrices(p)
+        parts = []
+        for (i, f, Om) in p["couplings"]:
+            s = np.zeros(P.N); s[i] = 1.0
+            p1 = float((A1 @ s).sum())
+            parts.append(f"{name(i)}->{name(f)} (Ω={Om/1e3:.3f}) p1={p1:.3f}")
+        # chequeo de conservacion sobre TODOS los estados iniciales
+        colsum = (A0 + A1).sum(axis=0)
+        ok = np.allclose(colsum, 1.0, atol=1e-6)
+        print(f"{p['id']:>2} {p['f_kHz']:>7.2f} {p['D_s']*1e3:>7.3f}  "
+              + " ; ".join(parts) + f"   [Σcol=1: {ok}]")
 
-    print("\nPulseLibrary (auto-enumeracion):")
-    lib2 = PulseLibrary(ham, use_table_s2_only=False)
-    print(f"  {lib2}")
+    A0L, A1L = P.precompute_matrices()
+    print(f"\nprecompute_matrices -> {len(A0L)} A0, {len(A1L)} A1, "
+          f"shape {A0L[0].shape}")
+
+
+# alias de compatibilidad con el codigo anterior
+CaHPulse = CaHPulses

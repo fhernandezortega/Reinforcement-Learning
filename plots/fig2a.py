@@ -1,301 +1,131 @@
-import sys
-import os
+"""
+fig2a.py — Diagrama de niveles de CaH+ (J=1,2) con la libreria de 13 pulsos.
+Reproduce la Fig. 2a del RL-QLS. Los datos (niveles Y flechas) vienen de la
+cadena validada: hamiltonian_cah -> generate_pulses_cah. Nada hardcodeado.
 
-sys.path.append(
-    os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            ".."
-        )
-    )
-)
-
+Notas de fisica que fija el diagrama:
+  - Dentro de cada J, el bloque xi=- esta ARRIBA del xi=+ (los xi=- tienen
+    mayor energia: en J=1, xi=+ ocupa 0-1.4 kHz y xi=- 9.0-26.1 kHz).
+    Por eso el orden I..XVI del paper lista primero los xi=+.
+  - Todos los pulsos son intra-manifold (ΔJ=0).
+  - Los pulsos 3, 4 y 9 son multi-transicion: dos flechas cada uno (una en
+    J=1 y otra en J=2) con el mismo numero -> 16 flechas para 13 pulsos.
+  - 10/11 y 12/13 son pares inversos entre los mismos dos estados: se curvan
+    en sentidos opuestos para que ambas se vean.
+"""
+import sys, os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
+
+from physics.hamiltonian_cah import CaHHamiltonian, rlqls_effective
+from physics.generate_pulses_cah import generate_nist_library
+
+ROMAN = ['I','II','III','IV','V','VI','VII','VIII','IX','X',
+         'XI','XII','XIII','XIV','XV','XVI']
 
 
-# ==========================================
-# CaH+ Energy Level Diagram (Fig. 2a)
-# ==========================================
+def datos_fig2a():
+    """(niveles, flechas, anotaciones) desde la cadena validada."""
+    ham = CaHHamiltonian(rlqls_effective())
+    L, E = ham.eig_labels, ham.energies_hz
+
+    niveles = [{"idx": i, "roman": ROMAN[i], "J": J, "m": m, "xi": x,
+                "E_kHz": E[i] / 1e3} for i, (J, m, x) in enumerate(L)]
+
+    flechas = []
+    for p in generate_nist_library(ham=ham):
+        for (li, lf, Om) in p["trans"]:
+            flechas.append({"pulso": p["paper_id"],
+                            "i": L.index(li), "f": L.index(lf),
+                            "Omega_kHz": Om})
+
+    # anotaciones: ancho total de cada manifold y separacion rotacional
+    anot = {}
+    for J in (1, 2):
+        idx = [i for i, (Jl, m, x) in enumerate(L) if Jl == J]
+        anot[J] = (max(E[i] for i in idx) - min(E[i] for i in idx)) / 1e3
+    anot["dJ_THz"] = (E[L.index((2, -1.5, '+'))]
+                      - E[L.index((1, -0.5, '+'))]) / 1e12
+    return niveles, flechas, anot
+
+
+# --------------------------------------------------------------------------
+niveles, flechas, anot = datos_fig2a()
+
+# posiciones: x = m ; y = fila (J, xi).  xi=- ARRIBA de xi=+ (mayor energia)
+YOF = {(1, '+'): 0.7, (1, '-'): 1.0, (2, '+'): 3.9, (2, '-'): 4.2}
+pos = {n["idx"]: (n["m"], YOF[(n["J"], n["xi"])]) for n in niveles}
 
 fig, ax = plt.subplots(figsize=(8, 6))
+LL = 0.34
 
-# ------------------------------------------
-# Energy positions
-# ------------------------------------------
+for n in niveles:
+    x, y = pos[n["idx"]]
+    ax.plot([x - LL/2, x + LL/2], [y, y], color="black", lw=2,
+            solid_capstyle="round", zorder=3)
+    ax.text(x, y + 0.07, n["roman"], ha="center", va="bottom", fontsize=6)
 
-E_J1_plus  = 1.0
-E_J1_minus = 0.7
-E_J2_plus  = 4.2
-E_J2_minus = 3.9
 
-level_len  = 0.35
-x_spacing  = 1.0
+def arrow(a, b, color, num, rad=0.0):
+    x0, y0 = pos[a]; x1, y1 = pos[b]
+    ax.annotate("", xy=(x1, y1), xytext=(x0, y0),
+                arrowprops=dict(arrowstyle="->", color=color, lw=1.2,
+                                shrinkA=5, shrinkB=5,
+                                connectionstyle=f"arc3,rad={rad}"), zorder=2)
+    # etiqueta desplazada segun la curvatura, para que no pise la flecha
+    xm, ym = (x0 + x1)/2, (y0 + y1)/2
+    ax.text(xm, ym + (0.055 if rad >= 0 else -0.055), str(num), color=color,
+            fontsize=6, fontweight="bold", ha="center", va="center",
+            bbox=dict(boxstyle="round,pad=0.05", fc="white", ec="none",
+                      alpha=0.85), zorder=4)
 
-# ------------------------------------------
-# J=1 states
-# m values: -3/2, -1/2, 1/2, 3/2
-# ------------------------------------------
 
-J1_m_vals = [-3/2, -1/2, 1/2, 3/2]
+for fl in flechas:
+    n = fl["pulso"]
+    color = "red" if n <= 9 else "blue"
+    same_row = pos[fl["i"]][1] == pos[fl["f"]][1]
+    if n in (11, 13):          # inversos de 10/12: curvar al otro lado
+        rad = -0.35
+    elif n in (10, 12):
+        rad = 0.35
+    elif same_row:
+        rad = 0.18
+    else:
+        rad = 0.0              # cruces xi=+ -> xi=- (pulsos 5 y 6)
+    arrow(fl["i"], fl["f"], color, n, rad=rad)
 
-# State labels from paper
-# xi=+: I, II, III  (m=-3/2,-1/2,1/2)
-# xi=-: IV, V, VI   (m=-3/2,-1/2,1/2)
+# ---- anotaciones fisicas (valores calculados, no hardcodeados) ----
+ax.text(-3.0, np.mean([YOF[(1, '+')], YOF[(1, '-')]]), "J=1",
+        fontsize=11, fontweight="bold", ha="right", va="center")
+ax.text(-3.0, np.mean([YOF[(2, '+')], YOF[(2, '-')]]), "J=2",
+        fontsize=11, fontweight="bold", ha="right", va="center")
+ax.annotate("", xy=(-2.6, YOF[(2, '+')] - 0.05), xytext=(-2.6, YOF[(1, '-')] + 0.05),
+            arrowprops=dict(arrowstyle="<->", lw=1.2))
+ax.text(-2.5, np.mean([YOF[(1, '-')], YOF[(2, '+')]]),
+        f"{anot['dJ_THz']:.2f} THz", fontsize=8, va="center")
 
-J1_plus_labels  = {-3/2: "I",   -1/2: "II",  1/2: "III"}
-J1_minus_labels = {-3/2: "IV",  -1/2: "V",   1/2: "VI"}
+for xz, J in [(3.2, 1), (3.2, 2)]:
+    yp, ym = YOF[(J, '-')], YOF[(J, '+')]
+    ax.annotate("", xy=(xz, yp), xytext=(xz, ym),
+                arrowprops=dict(arrowstyle="<->", lw=1))
+    ax.text(xz + 0.1, (yp + ym)/2, f"{anot[J]:.1f} kHz", fontsize=7, va="center")
 
-# ------------------------------------------
-# J=2 states
-# m values: -5/2, -3/2, -1/2, 1/2, 3/2, 5/2
-# ------------------------------------------
+for J in (1, 2):
+    ax.text(3.0, YOF[(J, '-')], "−", fontsize=11, va="center")
+    ax.text(3.0, YOF[(J, '+')], "+", fontsize=11, va="center")
+ax.text(1.2, 4.9, "B = 0.357 mT", fontsize=9, style="italic")
 
-J2_m_vals = [-5/2, -3/2, -1/2, 1/2, 3/2, 5/2]
-
-J2_plus_labels  = {
-    -3/2: "VII", -1/2: "VIII", 1/2: "IX",
-     3/2: "X",    5/2: "XI"
-}
-
-J2_minus_labels = {
-    -5/2: "XII",  -3/2: "XIII", -1/2: "XIV",
-     1/2: "XV",    3/2: "XVI"
-}
-
-# ------------------------------------------
-# Draw levels and collect positions
-# ------------------------------------------
-
-positions = {}
-
-def draw_level(ax, m, E, label, color="black"):
-    x = m * x_spacing
-    ax.plot(
-        [x - level_len/2, x + level_len/2],
-        [E, E],
-        color=color,
-        linewidth=2.0,
-        solid_capstyle="round",
-        zorder=3
-    )
-    ax.text(
-        x, E + 0.06,
-        label,
-        ha="center", va="bottom",
-        fontsize=6, color="black"
-    )
-    positions[label] = (x, E)
-
-# J=1 xi=+
-for m, lbl in J1_plus_labels.items():
-    draw_level(ax, m, E_J1_plus, lbl)
-
-# J=1 xi=-
-for m, lbl in J1_minus_labels.items():
-    draw_level(ax, m, E_J1_minus, lbl)
-
-# J=2 xi=+
-for m, lbl in J2_plus_labels.items():
-    draw_level(ax, m, E_J2_plus, lbl)
-
-# J=2 xi=-
-for m, lbl in J2_minus_labels.items():
-    draw_level(ax, m, E_J2_minus, lbl)
-
-# ------------------------------------------
-# Draw arrows
-# ------------------------------------------
-
-def draw_arrow(ax, from_lbl, to_lbl,
-               color, pnum, style="->",
-               offset=(0.05, 0)):
-
-    if from_lbl not in positions:
-        return
-    if to_lbl not in positions:
-        return
-
-    x0, y0 = positions[from_lbl]
-    x1, y1 = positions[to_lbl]
-
-    ax.annotate(
-        "",
-        xy=(x1, y1),
-        xytext=(x0, y0),
-        arrowprops=dict(
-            arrowstyle=style,
-            color=color,
-            lw=1.3,
-            shrinkA=4,
-            shrinkB=4,
-        ),
-        zorder=2
-    )
-
-    xm = (x0 + x1) / 2 + offset[0]
-    ym = (y0 + y1) / 2 + offset[1]
-
-    ax.text(
-        xm, ym,
-        str(pnum),
-        fontsize=7,
-        color=color,
-        ha="left",
-        va="center",
-        fontweight="bold"
-    )
-
-# Red arrows (pulses 1-9): J=1 -> J=2
-draw_arrow(ax, "I",   "VII",  "red",  1)
-draw_arrow(ax, "II",  "VIII", "red",  2)
-draw_arrow(ax, "III", "IX",   "red",  3)
-draw_arrow(ax, "IV",  "VII",  "red",  4, offset=(-0.15, 0))
-draw_arrow(ax, "XII", "XII",  "red",  5)
-draw_arrow(ax, "VI",  "XI",   "red",  9)
-
-# Blue arrows (pulses 10-13): horizontal within J
-draw_arrow(ax, "IV",  "V",   "blue", 10, style="<->")
-draw_arrow(ax, "V",   "IV",  "blue", 11, style="<->",
-           offset=(-0.15, -0.08))
-draw_arrow(ax, "XII", "XIII","blue", 12, style="<->")
-draw_arrow(ax, "XIII","XII", "blue", 13, style="<->",
-           offset=(-0.15, -0.08))
-
-# ------------------------------------------
-# xi labels
-# ------------------------------------------
-
-x_xi = 3.2 * x_spacing
-
-ax.text(x_xi, E_J1_plus,  "+", fontsize=11,
-        va="center", ha="left")
-ax.text(x_xi, E_J1_minus, "−", fontsize=11,
-        va="center", ha="left")
-ax.text(x_xi, E_J2_plus,  "+", fontsize=11,
-        va="center", ha="left")
-ax.text(x_xi, E_J2_minus, "−", fontsize=11,
-        va="center", ha="left")
-
-# ------------------------------------------
-# J labels
-# ------------------------------------------
-
-ax.text(
-    -3.2 * x_spacing, (E_J1_plus + E_J1_minus)/2,
-    "J=1", fontsize=11, fontweight="bold",
-    va="center", ha="right"
-)
-
-ax.text(
-    -3.2 * x_spacing, (E_J2_plus + E_J2_minus)/2,
-    "J=2", fontsize=11, fontweight="bold",
-    va="center", ha="right"
-)
-
-# ------------------------------------------
-# 0.57 THz gap
-# ------------------------------------------
-
-x_gap = -2.8 * x_spacing
-
-ax.annotate(
-    "",
-    xy=(x_gap, E_J2_minus - 0.1),
-    xytext=(x_gap, E_J1_plus + 0.1),
-    arrowprops=dict(
-        arrowstyle="<->",
-        color="black",
-        lw=1.2
-    )
-)
-
-ax.text(
-    x_gap + 0.1,
-    (E_J1_plus + E_J2_minus) / 2,
-    "0.57 THz",
-    fontsize=8, va="center"
-)
-
-# ------------------------------------------
-# Zeeman splitting annotations
-# ------------------------------------------
-
-x_zm = 3.8 * x_spacing
-
-# J=2
-ax.annotate(
-    "",
-    xy=(x_zm, E_J2_plus + 0.05),
-    xytext=(x_zm, E_J2_minus - 0.05),
-    arrowprops=dict(
-        arrowstyle="<->",
-        color="black", lw=1.0
-    )
-)
-
-ax.text(
-    x_zm + 0.1,
-    (E_J2_plus + E_J2_minus)/2,
-    "37.6 kHz",
-    fontsize=7, va="center"
-)
-
-# J=1
-ax.annotate(
-    "",
-    xy=(x_zm, E_J1_plus + 0.05),
-    xytext=(x_zm, E_J1_minus - 0.05),
-    arrowprops=dict(
-        arrowstyle="<->",
-        color="black", lw=1.0
-    )
-)
-
-ax.text(
-    x_zm + 0.1,
-    (E_J1_plus + E_J1_minus)/2,
-    "26.1 kHz",
-    fontsize=7, va="center"
-)
-
-# ------------------------------------------
-# B field
-# ------------------------------------------
-
-ax.text(
-    1.5 * x_spacing, 5.0,
-    "B = 0.36 mT",
-    fontsize=9, style="italic"
-)
-
-# ------------------------------------------
-# m axis
-# ------------------------------------------
-
-m_ticks = [-5/2, -3/2, -1/2, 1/2, 3/2, 5/2]
-
-ax.set_xticks([m * x_spacing for m in m_ticks])
-
-ax.set_xticklabels([
-    "−5/2", "−3/2", "−1/2",
-    "1/2",  "3/2",  "5/2"
-], fontsize=9)
-
-ax.set_xlabel("m", fontsize=11)
-ax.set_ylabel("E (not to scale)", fontsize=10)
-ax.set_yticks([])
-
-ax.spines["top"].set_visible(False)
-ax.spines["right"].set_visible(False)
-ax.spines["left"].set_visible(False)
-
-ax.set_xlim(-3.5 * x_spacing, 4.5 * x_spacing)
-ax.set_ylim(0.2, 5.2)
-
-plt.tight_layout()
-plt.savefig("fig2a.png", dpi=300, bbox_inches="tight")
-plt.show()
-
-print("Fig. 2a guardada.", flush=True)
+ax.set_xticks([-2.5, -1.5, -0.5, 0.5, 1.5, 2.5])
+ax.set_xticklabels(["−5/2", "−3/2", "−1/2", "1/2", "3/2", "5/2"])
+ax.set_xlabel("m"); ax.set_ylabel("E (not to scale)"); ax.set_yticks([])
+for sp in ["top", "right", "left"]:
+    ax.spines[sp].set_visible(False)
+ax.set_xlim(-3.4, 3.8); ax.set_ylim(0.2, 5.1)
+plt.tight_layout(); plt.savefig("fig2a.png", dpi=150, bbox_inches="tight")
+print(f"estados: {len(niveles)} | flechas: {len(flechas)} "
+      f"(13 pulsos, 3 multi-transicion)")
+print(f"anotaciones calculadas: J=1 {anot[1]:.2f} kHz, J=2 {anot[2]:.2f} kHz, "
+      f"ΔJ {anot['dJ_THz']:.3f} THz")

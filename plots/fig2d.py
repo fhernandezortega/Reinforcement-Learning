@@ -1,295 +1,125 @@
-import sys
 import os
-
-# ==========================================
-# Agregar raíz del proyecto al PATH
-# ==========================================
-
-sys.path.append(
-    os.path.abspath(
-        os.path.join(
-            os.path.dirname(__file__),
-            ".."
-        )
-    )
-)
-
-import torch
-import numpy as np
 import json
-
-from env.rlqls_env_cah import RLQLSEnvCaH
-from rl.dqn import DQN
+import matplotlib.pyplot as plt
 
 
 # ==========================================
-# Parámetros
+# Rutas
 # ==========================================
 
-MAX_DEPTH = 10
-PURITY_THRESHOLD = 0.99
-
-
-# ==========================================
-# Environment
-# ==========================================
-
-env = RLQLSEnvCaH(
-    T=300.0,
-    purity_threshold=PURITY_THRESHOLD
-)
-
-print(
-    f"Estados: {env.n_states} | "
-    f"Acciones: {env.n_actions}",
-    flush=True
-)
+HERE = os.path.dirname(os.path.abspath(__file__))
+JSON_PATH = os.path.join(HERE, "tree_data_structured.json")
+OUT_PATH  = os.path.join(HERE, "fig2d_tree.png")
 
 
 # ==========================================
-# Modelo entrenado
+# Parametros
 # ==========================================
 
-model = DQN(
-    n_states=env.n_states,
-    n_actions=env.n_actions
-)
+DX = 1.8          # separacion horizontal por nivel
+DY = 1.0          # separacion vertical entre hojas
+MIN_BRANCH_PROB = 0.02   # podar ramas de baja probabilidad acumulada
 
-model.load_state_dict(
-    torch.load("dqn_cah_model.pt")
-)
 
-model.eval()
-
-print("Modelo cargado.", flush=True)
+with open(JSON_PATH, "r") as f:
+    tree = json.load(f)
 
 
 # ==========================================
-# Expansión recursiva del árbol
+# 1) Layout: asignar (x, y) sin solapes
+#    x = profundidad, y = posicion segun hojas
 # ==========================================
 
-def expand_tree(
-    state,
-    depth,
-    branch_probability,
-    history
-):
-
-    # ======================================
-    # Limitar profundidad
-    # ======================================
-
-    if depth >= MAX_DEPTH:
-
-        return None
-
-    purity = np.max(state)
-
-    # ======================================
-    # Estado terminal
-    # ======================================
-
-    if purity >= PURITY_THRESHOLD:
-
-        return {
-
-            "type": "terminal",
-
-            "depth": depth,
-
-            "probability": branch_probability,
-
-            "terminal_state": int(
-                np.argmax(state)
-            ),
-
-            "purity": float(purity),
-
-            "history": history
-        }
-
-    # ======================================
-    # Inferencia DQN
-    # ======================================
-
-    state_t = torch.FloatTensor(state)
-
-    with torch.no_grad():
-
-        q_values = model(state_t)
-
-        action = torch.argmax(
-            q_values
-        ).item()
-
-    # ======================================
-    # Obtener información del pulso
-    # CORREGIDO
-    # ======================================
-
-    pulse = env.ACTIONS[action]
-
-    # ======================================
-    # Matrices de transición
-    # ======================================
-
-    A0, A1 = env.get_transition_matrices(action)
-
-    # ======================================
-    # Evolución probabilística
-    # ======================================
-
-    s0 = A0 @ state
-    s1 = A1 @ state
-
-    p0 = float(np.sum(s0))
-    p1 = float(np.sum(s1))
-
-    # ======================================
-    # Normalizar estados
-    # ======================================
-
-    if p0 > 1e-12:
-
-        s0 = s0 / p0
-
-    if p1 > 1e-12:
-
-        s1 = s1 / p1
-
-    # ======================================
-    # Nodo actual
-    # ======================================
-
-    node_info = {
-
-        "type": "node",
-
-        "depth": depth,
-
-        "probability": branch_probability,
-
-        "action": action + 1,
-
-        "pulse_label": pulse["label"],
-
-        "p(k=0)": p0,
-
-        "p(k=1)": p1,
-
-        "purity": float(purity),
-
-        "history": history,
-
-        "children": {}
-    }
-
-    # ======================================
-    # Rama k=0
-    # ======================================
-
-    if p0 > 1e-8:
-
-        next_history_0 = history + [
-
-            {
-                "action": action + 1,
-
-                "measurement": "k=0",
-
-                "probability": p0
-            }
-        ]
-
-        child_0 = expand_tree(
-
-            s0,
-
-            depth + 1,
-
-            branch_probability * p0,
-
-            next_history_0
-        )
-
-        if child_0:
-
-            node_info["children"]["k=0"] = child_0
-
-    # ======================================
-    # Rama k=1
-    # ======================================
-
-    if p1 > 1e-8:
-
-        next_history_1 = history + [
-
-            {
-                "action": action + 1,
-
-                "measurement": "k=1",
-
-                "probability": p1
-            }
-        ]
-
-        child_1 = expand_tree(
-
-            s1,
-
-            depth + 1,
-
-            branch_probability * p1,
-
-            next_history_1
-        )
-
-        if child_1:
-
-            node_info["children"]["k=1"] = child_1
-
-    return node_info
+nodes = []   # lista de dicts: {id, x, y, node}
+edges = []   # lista de dicts: {u, v, kind, prob}
+_next_id = [0]
+_leaf_y  = [0.0]
+
+def kept_children(node):
+    """Hijos que superan el umbral de probabilidad acumulada."""
+    out = []
+    for kind in ("k=0", "k=1"):
+        ch = node.get("children", {}).get(kind)
+        if ch is not None and ch.get("probability", 0.0) >= MIN_BRANCH_PROB:
+            out.append((kind, ch))
+    return out
+
+def layout(node):
+    """Asigna posiciones; devuelve (id, y) del nodo."""
+    nid = _next_id[0]; _next_id[0] += 1
+    x = node["depth"] * DX
+
+    children = kept_children(node) if node["type"] == "node" else []
+
+    if not children:
+        y = _leaf_y[0]; _leaf_y[0] -= DY
+    else:
+        child_ys = []
+        for kind, ch in children:
+            cid, cy = layout(ch)
+            edges.append({
+                "u": nid, "v": cid, "kind": kind,
+                "prob": ch.get("branch_prob", 0.0),
+            })
+            child_ys.append(cy)
+        y = sum(child_ys) / len(child_ys)
+
+    nodes.append({"id": nid, "x": x, "y": y, "node": node})
+    return nid, y
+
+layout(tree)
+
+pos = {n["id"]: (n["x"], n["y"]) for n in nodes}
 
 
 # ==========================================
-# Construcción del árbol
+# 2) Dibujar
 # ==========================================
 
-initial_state, _ = env.reset()
+fig, ax = plt.subplots(figsize=(13, 8))
 
-print(
-    "Construyendo árbol...",
-    flush=True
-)
-
-tree_root = expand_tree(
-
-    state=initial_state,
-
-    depth=0,
-
-    branch_probability=1.0,
-
-    history=[]
-)
-
-
-# ==========================================
-# Guardar JSON
-# ==========================================
-
-with open(
-    "tree_data_structured.json",
-    "w"
-) as f:
-
-    json.dump(
-        tree_root,
-        f,
-        indent=2
+# aristas
+for e in edges:
+    x0, y0 = pos[e["u"]]
+    x1, y1 = pos[e["v"]]
+    color = "black" if e["kind"] == "k=0" else "deepskyblue"
+    ax.annotate(
+        "", xy=(x1, y1), xytext=(x0, y0),
+        arrowprops=dict(arrowstyle="->", color=color, lw=1.5,
+                        shrinkA=12, shrinkB=12),
+        zorder=1,
     )
+    xm, ym = (x0 + x1) / 2, (y0 + y1) / 2
+    ax.text(xm, ym + 0.10, f"{e['prob']:.2f}", color=color,
+            fontsize=8, fontweight="bold", ha="center", zorder=3)
 
-print(
-    "Árbol guardado correctamente.",
-    flush=True
-)
+# nodos
+for n in nodes:
+    node = n["node"]
+    x, y = n["x"], n["y"]
+    if node["type"] == "terminal":
+        label = str(node["terminal_state"])
+        fc, ec = "#D9D9D9", "gray"
+    elif node["type"] == "cutoff":
+        label = "…"
+        fc, ec = "white", "orange"
+    else:
+        label = str(node["action"])   # numero de pulso (rojo)
+        fc, ec = "white", "red"
+    ax.scatter([x], [y], s=650, facecolors=fc, edgecolors=ec,
+               linewidths=1.6, zorder=2)
+    ax.text(x, y, label, ha="center", va="center", fontsize=9, zorder=4)
+
+# leyenda estilo paper
+y_top = max(p[1] for p in pos.values()) + 1.0
+ax.text(-0.4, y_top,       "k=0  →  termination", color="black",
+        fontsize=11, va="center")
+ax.text(-0.4, y_top - 0.6, "k=1", color="deepskyblue",
+        fontsize=11, va="center")
+
+ax.set_title("Fig. 2(d) — RL-QLS Decision Tree", fontsize=15)
+ax.axis("off")
+plt.tight_layout()
+plt.savefig(OUT_PATH, dpi=300, bbox_inches="tight")
+print(f"Figura guardada: {OUT_PATH}", flush=True)
+plt.show()

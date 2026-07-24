@@ -1,198 +1,178 @@
 """
-train_cah.py — Loop de entrenamiento RL-QLS para CaH+ (J<=2)
-==============================================================
-Referencia: PIPI2026 Fig. 2b, Sec. SD
+train_cah.py — Entrenamiento RL-QLS CaH+ (Fig. 2b y 2c) — versión unificada.
 
-Configuracion actual:
-  - 48 pulsos auto-enumerados (reglas E1)
-  - R = -1 + penalizacion estancamiento (Sec. SD)
-  - qMDP update (Ec. S18): incorpora p0, p1, s'_k0, s'_k1
-    en el replay buffer para el update de TD
+Funcion principal:
+  train_all()  -> UNA corrida genera TODO:
+       - training_history.json  (Fig. 2b; de la semilla primaria=seeds[0])
+       - checkpoints/model_ep<N>.pt  (para fig_2c.py basado en checkpoints)
+       - fig2c_data.json  (Fig. 2c multi-semilla: curva promedio + banda + inset)
+
+Funciones auxiliares (mismas de antes, por si quieres una sola cosa):
+  train()       -> solo un modelo (history + checkpoints)
+  train_fig2c() -> solo la curva multi-semilla (fig2c_data.json)
+
+Salida: directorio OUTDIR (env RLQLS_OUT, por defecto el directorio actual).
+
+max_steps: tope de pasos por episodio. El paper no especifica ninguno; un tope
+bajo trunca los episodios largos del inicio del entrenamiento y sesga la media
+hacia abajo (con tope 30 se trunca el 3.2%; con 200, el 0%). Default 200.
 """
+import os, sys, json, time
+import numpy as np, torch
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+try:
+    from env.rlqls_env_cah import RLQLSEnvCaH
+except ModuleNotFoundError:
+    from env.rlqls_env_cah import RLQLSEnvCaH
+try:
+    from rl.dqn import DQNAgent
+except ModuleNotFoundError:
+    from rl.dqn import DQNAgent
 
-import sys
-import os
-
-sys.path.append(
-    os.path.abspath(
-        os.path.join(os.path.dirname(__file__), "..")
-    )
-)
-
-import numpy as np
-import json
-import torch
-
-from env.rlqls_env_cah import RLQLSEnvCaH
-from rl.dqn import DQNAgent
+OUTDIR = os.environ.get("RLQLS_OUT", ".")
 
 
-# =====================================================================
-# Reproducibilidad
-# =====================================================================
-
-SEED = 42
-np.random.seed(SEED)
-torch.manual_seed(SEED)
-
-
-# =====================================================================
-# Entorno
-# =====================================================================
-
-env = RLQLSEnvCaH(
-    T=300.0,
-    purity_threshold=0.99,
-    ro=1.0,                    # peso penalizacion estancamiento
-    use_table_s2_only=False,   # 48 pulsos auto-enumerados
-)
-
-print(
-    f"States: {env.n_states}, "
-    f"Actions: {env.n_actions}",
-    flush=True
-)
-
-os.makedirs("checkpoints", exist_ok=True)
-
-
-# =====================================================================
-# Hiperparametros (Sec. SD, Tabla S1)
-# =====================================================================
-
-episodes = 1500   # mas episodios para convergencia con 48 acciones
-
-
-# =====================================================================
-# Agente DQN con qMDP
-# =====================================================================
-
-agent = DQNAgent(
-    n_states        = env.n_states,
-    n_actions       = env.n_actions,
-    hidden_dims     = [128, 128, 128],  # Sec. SD
-    buffer_capacity = 50_000,           # mayor buffer para qMDP
-    batch_size      = 64,               # batch mas grande para qMDP
-    min_buffer      = 64,
-    lr              = 5e-4,             # Tabla S1
-    gamma           = 1.0,              # sin descuento
-    eps_start       = 1.0,
-    eps_end         = 0.005,            # Sec. SD
-    N_training      = episodes,
-    tau_update      = 0.001,            # Tabla S1
-    loss_type       = 'smooth_l1',
-    use_qmdp        = True,             # qMDP (Ec. S18)
-)
-
-print(f"\n{agent}", flush=True)
-
-
-# =====================================================================
-# Estadisticas
-# =====================================================================
-
-reward_history = []
-step_history   = []
-purity_history = []
-
-
-# =====================================================================
-# Loop de entrenamiento con qMDP
-# =====================================================================
-
-for episode in range(episodes):
-
-    state, _ = env.reset()
-    done         = False
-    total_reward = 0.0
-    step_count   = 0
-
-    while not done:
-
-        # Seleccion epsilon-greedy
-        action = agent.select_action(state, explore=True)
-
-        # ── Precomputar ramas qMDP ANTES del step ────────────────────
-        # Necesario para almacenar p0, p1, s'_k0, s'_k1 en el buffer
-        # segun Ec. S18 sin re-ejecutar el simulador en el update
-        A0, A1 = env.get_transition_matrices(action)
-        v0 = A0 @ state
-        v1 = A1 @ state
-        p0 = float(v0.sum())
-        p1 = float(v1.sum())
-        total = p0 + p1 + 1e-12
-        p0 /= total
-        p1 /= total
-
-        # Normalizar estados post-medicion
-        s_k0 = v0 / (v0.sum() + 1e-12) if v0.sum() > 1e-10 \
-               else np.ones(env.n_states) / env.n_states
-        s_k1 = v1 / (v1.sum() + 1e-12) if v1.sum() > 1e-10 \
-               else np.ones(env.n_states) / env.n_states
-
-        # ── Paso del entorno ─────────────────────────────────────────
-        next_state, reward, done, _, info = env.step(action)
-
-        total_reward += reward
-        step_count   += 1
-
-        # ── Almacenar con datos qMDP ──────────────────────────────────
-        # Ec. S18: el buffer guarda ambas ramas para el TD update
-        agent.store(
-            state, action, reward, next_state, done,
-            p0=p0, p1=p1,
-            next_s_k0=s_k0.astype(np.float32),
-            next_s_k1=s_k1.astype(np.float32),
-        )
-
-        state = next_state
-
-        # ── qMDP update (Ec. S18) ─────────────────────────────────────
-        agent.update()
-
-    # ── Fin de episodio ───────────────────────────────────────────────
-    agent.decay_epsilon()
-
-    # ── Logging ───────────────────────────────────────────────────────
-    reward_history.append(total_reward)
-    step_history.append(step_count)
-    purity_history.append(info["purity"])
-
-    avg_steps  = np.mean(step_history[-100:])
-    avg_purity = np.mean(purity_history[-100:])
-
-    print(
-        f"Episode {episode:4d} | "
-        f"steps={step_count:3d} | "
-        f"reward={total_reward:8.2f} | "
-        f"purity={info['purity']:.3f} | "
-        f"avg_steps={avg_steps:5.2f} | "
-        f"avg_purity={avg_purity:.3f} | "
-        f"epsilon={agent.eps:.3f}",
-        flush=True
+def _make_agent(env, n_episodes, use_qmdp, seed):
+    np.random.seed(seed); torch.manual_seed(seed)
+    return DQNAgent(
+        n_states=env.n_states, n_actions=env.n_actions,
+        N_training=n_episodes, use_qmdp=use_qmdp,
+        purity_threshold=env.purity_threshold,
+        loss_type='smooth_l1', eps_end=0.005, lr=5e-4, tau_update=0.001,
+        batch_size=32, device='cpu',
     )
 
-    # ── Checkpoint cada 50 episodios (para Fig. 2c) ───────────────────
-    if (episode + 1) % 50 == 0:
-        path = f"checkpoints/model_ep{episode+1}.pt"
-        agent.save(path)
-        print(f"Checkpoint guardado: {path}", flush=True)
+
+def evaluate(env, agent, n=200, return_raw=False):
+    """Longitud de episodio con politica greedy (explore=False) — testing Fig.2c."""
+    L = []
+    for _ in range(n):
+        s, _ = env.reset(); done = False; steps = 0
+        while not done:
+            a = agent.select_action(s, explore=False)
+            s, r, term, trunc, info = env.step(a)
+            done = term or trunc; steps += 1
+        L.append(steps)
+    m = float(np.mean(L))
+    return (m, L) if return_raw else m
+
+def _run_seed(seed, n_episodes, use_qmdp, eval_every, eval_n,
+              save_ckpt=False, ckpt_dir=None, inset_at=None, inset_n=0,
+              final_eval_n=0, max_steps=200,tag=""):
+    """Entrena una semilla; devuelve (lengths, eval_at, eval_len, inset_lengths, final_lengths).
+    final_lengths: distribucion de longitudes del modelo FINAL sobre final_eval_n
+    episodios de test (para la Tabla I). Vacia si final_eval_n=0."""
+    env = RLQLSEnvCaH(max_steps=max_steps); env.reset(seed=seed)
+    eval_env = RLQLSEnvCaH(max_steps=max_steps); eval_env.reset(seed=10_000 + seed)
+    agent = _make_agent(env, n_episodes, use_qmdp, seed)
+    lengths = []; eval_at = []; eval_len = []; inset_lengths = None
+    for ep in range(n_episodes):
+        s, _ = env.reset(); done = False; steps = 0
+        while not done:
+            a = agent.select_action(s, explore=True)
+            if use_qmdp:
+                p0, p1, S0, S1, _, _ = env.qmdp_branches(s, a)
+                s2, r, term, trunc, info = env.step(a)
+                agent.store(s, a, r, s2, term, p0, p1, S0, S1)
+            else:
+                s2, r, term, trunc, info = env.step(a)
+                agent.store(s, a, r, s2, term)
+            agent.update(); s = s2; steps += 1; done = term or trunc
+        agent.decay_epsilon(ep + 1); lengths.append(steps)
+        if (ep + 1) % eval_every == 0:
+            eval_at.append(ep + 1)
+            eval_len.append(evaluate(eval_env, agent, n=eval_n))
+            if save_ckpt:
+                agent.save(os.path.join(ckpt_dir, f"model_ep{ep+1}.pt"))
+        if inset_at is not None and (ep + 1) == inset_at:
+            _, inset_lengths = evaluate(eval_env, agent, n=inset_n, return_raw=True)
+    # distribucion del modelo final (Tabla I)
+    final_lengths = None
+    if final_eval_n > 0:
+        _, final_lengths = evaluate(eval_env, agent, n=final_eval_n, return_raw=True)
+    return lengths, eval_at, eval_len, inset_lengths, final_lengths
 
 
-# =====================================================================
-# Guardar modelo final e historial
-# =====================================================================
+# ---------------------------------------------------------------------------
+# UNIFICADA: genera history + checkpoints + fig2c_data en una corrida
+# ---------------------------------------------------------------------------
+def train_all(seeds=(0, 1, 2, 3, 4), n_episodes=1000, use_qmdp=True,
+              eval_every=50, eval_n=200, inset_at=600, inset_n=1000,
+              final_eval_n=5000, max_steps=200):
+    os.makedirs(OUTDIR, exist_ok=True)
+    ckpt_dir = os.path.join(OUTDIR, "checkpoints")
+    os.makedirs(ckpt_dir, exist_ok=True)
+    t0 = time.time()
+    print(f"=== train_all | {len(seeds)} semillas x {n_episodes} ep "
+          f"| {'qMDP' if use_qmdp else 'MDP'} ===")
 
-agent.save("dqn_cah_model.pt")
+    curves = []
+    hist = {}
+    inset_lengths = None
+    final_lengths = None
+    for si, seed in enumerate(seeds):
+        primary = (si == 0)
+        lengths, eval_at, eval_len, inset, finl = _run_seed(
+            seed, n_episodes, use_qmdp, eval_every, eval_n,
+            save_ckpt=primary, ckpt_dir=ckpt_dir,
+            inset_at=(inset_at if primary else None), inset_n=inset_n,
+            final_eval_n=(final_eval_n if primary else 0), max_steps=max_steps)
+        curves.append(eval_len)
+        if primary:
+            hist = {"steps": lengths, "eval_at": eval_at, "eval_len": eval_len}
+            inset_lengths = inset
+            final_lengths = finl
+        print(f"  semilla {seed}{' (primaria)' if primary else ''}: "
+              f"eval_final={eval_len[-1]:.2f} | {time.time()-t0:.0f}s")
 
-history = {
-    "steps":   step_history,
-    "rewards": reward_history,
-    "purity":  purity_history,
-}
+    curves = np.array(curves)                      # (K, n_checkpoints)
 
-with open("training_history.json", "w") as f:
-    json.dump(history, f)
+    # 1) training_history.json  (Fig. 2b)
+    with open(os.path.join(OUTDIR, "training_history.json"), "w") as f:
+        json.dump({**hist, "sweeping": 9.7, "max_steps": max_steps,
+                   "mode": "qMDP" if use_qmdp else "MDP", "seed": seeds[0]}, f)
+    # 2) fig2c_data.json  (Fig. 2c multi-semilla)
+    with open(os.path.join(OUTDIR, "fig2c_data.json"), "w") as f:
+        json.dump({"eval_at": hist["eval_at"], "curves": curves.tolist(),
+                   "mean": curves.mean(0).tolist(), "std": curves.std(0).tolist(),
+                   "inset_at": inset_at, "inset_lengths": inset_lengths,
+                   "sweeping": 9.7, "n_seeds": len(seeds), "eval_n": eval_n}, f)
+    # 3) episode_lengths.npy  (modelo final, semilla primaria -> Tabla I)
+    if final_lengths is not None:
+        np.save(os.path.join(OUTDIR, "episode_lengths.npy"),
+                np.asarray(final_lengths, dtype=np.int32))
 
-print("Model saved.", flush=True)
-print("Historia guardada.", flush=True)
+    print(f"\nGenerado en '{OUTDIR}':")
+    print(f"  training_history.json   -> Fig. 2b (semilla {seeds[0]})")
+    print(f"  checkpoints/            -> {len(hist['eval_at'])} modelos (semilla {seeds[0]}) para tu fig_2c.py")
+    print(f"  fig2c_data.json         -> Fig. 2c multi-semilla (mean final = {curves.mean(0)[-1]:.2f}, paper ~8.3)")
+    if final_lengths is not None:
+        arr = np.asarray(final_lengths)
+        print(f"  episode_lengths.npy     -> Tabla I ({len(arr)} test eps, "
+              f"exito={100*np.mean(arr < 30):.1f}%, media={arr.mean():.2f})")
+    print(f"Tiempo total: {(time.time()-t0)/60:.1f} min")
+
+# ---- envoltorios de una sola cosa (compatibilidad) ----
+def train(n_episodes=1000, use_qmdp=True, seed=0, eval_every=50,
+          final_eval_n=5000, max_steps=200):
+    os.makedirs(OUTDIR, exist_ok=True)
+    ckpt_dir = os.path.join(OUTDIR, "checkpoints"); os.makedirs(ckpt_dir, exist_ok=True)
+    lengths, eval_at, eval_len, _, final_lengths = _run_seed(
+        seed, n_episodes, use_qmdp, eval_every, 200,
+        save_ckpt=True, ckpt_dir=ckpt_dir, final_eval_n=final_eval_n,
+        max_steps=max_steps)
+    with open(os.path.join(OUTDIR, "training_history.json"), "w") as f:
+        json.dump({"steps": lengths, "eval_at": eval_at, "eval_len": eval_len,
+                   "sweeping": 9.7, "max_steps": max_steps,
+                   "mode": "qMDP" if use_qmdp else "MDP", "seed": seed}, f)
+    if final_lengths is not None:
+        np.save(os.path.join(OUTDIR, "episode_lengths.npy"),
+                np.asarray(final_lengths, dtype=np.int32))
+    print("Generado: training_history.json + checkpoints/ + episode_lengths.npy")
+
+
+if __name__ == "__main__":
+    # UNA corrida -> Fig. 2b y Fig. 2c (ambas versiones)
+    train_all(seeds=(0, 1, 2, 3, 4), n_episodes=1000,
+              eval_every=50, eval_n=200, inset_at=600, inset_n=1000,
+              max_steps=200)
