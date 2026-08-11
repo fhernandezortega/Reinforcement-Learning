@@ -3,26 +3,6 @@ DQN Agent — RL-QLS (PIPI2026 Sec. SD)
 =======================================
 Deep Q-Network con double-Q networks y experience replay para
 preparacion de estados moleculares puros.
-
-Diferencias clave respecto a un DQN estandar:
-  - gamma = 1.0 exactamente (tarea episodica sin descuento, Sec. SD)
-  - Decaimiento de epsilon segun Ec. S16 del paper:
-        eps(n) = eps_end + (eps_start - eps_end) * exp(-n / tau_eps)
-    con tau_eps = 0.3 * N_training
-    (NOTA: el paper escribe (eps_end - eps_start), que daria eps<0 en
-     n=0; se usa (eps_start - eps_end), que arranca en eps_start y decae
-     a eps_end. Es la correccion de un typo de signo del paper.)
-  - Actualizacion suave del target network con parametro tau (soft update)
-    O actualizacion dura cada C pasos (configurable)
-  - Soporte para qMDP temporal difference update (Ec. S18)
-    que incorpora explicitamente las probabilidades de medicion POVM
-  - Funcion de perdida: MSE o Smooth L1 (ambas reportadas en Sec. SD)
-  - Red neuronal: 3 capas ocultas de 128 nodos, ReLU (Sec. SD)
-
-Hiperparametros reportados para CaH+ J in {1,2} (Tabla S1 / Sec. SD):
-  tau_update = 0.001, lr = 0.0005, eps_end = 0.005, batch_size = 32
-
-Referencia: PIPI2026 Sec. SD, Ec. S14-S18
 """
 
 import numpy as np
@@ -225,7 +205,9 @@ class DQNAgent:
     def _compute_eps(self, n: int) -> float:
         """eps(n) = eps_end + (eps_start - eps_end) * exp(-n / tau_eps)"""
         return self.eps_end + (self.eps_start - self.eps_end) * \
-               np.exp(-n / max(self.tau_eps, 1e-8))
+               np.exp(-n / max(self.tau_eps, 1e-8)) 
+        #return self.eps_end + (self.eps_end - self.eps_start) * \
+        #       np.exp(-n / max(self.tau_eps, 1e-8))
 
     def decay_epsilon(self, episode: Optional[int] = None) -> float:
         """
@@ -382,7 +364,8 @@ class DQNAgent:
         }, path)
 
     def load(self, path: str) -> None:
-        ckpt = torch.load(path, map_location=self.device)
+        #ckpt = torch.load(path, map_location=self.device)
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
         self.q_online.load_state_dict(ckpt["q_online"])
         self.q_target.load_state_dict(ckpt["q_target"])
         self.optimizer.load_state_dict(ckpt["optimizer"])

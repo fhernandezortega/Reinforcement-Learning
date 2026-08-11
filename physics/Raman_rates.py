@@ -1,17 +1,5 @@
 """
 Calculador de tasas Raman-Rabi angulares para CaH+ (Chou 2017, Ecs. 17-22).
-Evita la fisica electronica: el prefactor E (Ec.17) es un escalar comun que
-se CALIBRA con la transicion de referencia (2pi x 2.078 kHz — valor
-EXPERIMENTAL de Chou, Methods, = Tabla S2 pulsos 10/11; el "2.087" del SM
-del RL-QLS es un typo por transposicion). La parte angular usa los
-coeficientes del autovector (columnas de V) + 3j de Wigner.
-
-Haces (Chou, Methods): un haz pi (k=0) y un haz sigma- (k=-1), 1051 nm CW.
-La configuracion excita Delta m = -1; la direccion inversa (Delta m = +1,
-via sigma+) tiene identica |Omega| (Ec. S10 / Tabla S2: pulsos 10/11 y
-12/13 comparten Omega) y se obtiene evaluando omega_hz(j, i).
-Regla ΔJ=0 total (dos fotones), intermedios J_int = J ± 1.
-
 Uso:  python Raman_rates.py            (listado Δm=-1 + cociente J1/J2)
       python Raman_rates.py validate   (tabla vs S2, presets Chou y RL-QLS)
 """

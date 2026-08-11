@@ -19,8 +19,13 @@ import matplotlib.pyplot as plt
 # Archivo generado durante la evaluación
 # Una fila = un episodio
 # Valor = número de pulsos utilizados hasta terminar
+import os
 
-episode_lengths = np.load("rl/episode_lengths.npy")
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.abspath(os.path.join(HERE, ".."))
+
+episode_lengths = np.load(os.path.join(ROOT, "episode_lengths.npy"))
+
 
 print(episode_lengths)
 print(episode_lengths.shape)

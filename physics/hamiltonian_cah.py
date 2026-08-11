@@ -1,87 +1,3 @@
-"""
-hamiltonian_cah.py — Hamiltoniano CaH+ (J=1,2) corregido y verificado
-=======================================================================
-Referencias:
-  - Chou et al., Nature 545, 203 (2017)  [ref. 18 del RL-QLS], arXiv:1612.03926
-  - Pipi, Tao, Wu, Narang, Leibrandt (RL-QLS), Ec. S9 / Sec. SC
-
-Hamiltoniano rotacional-hiperfino (Ec. S9 / Chou Ec. 1), en unidades de
-frecuencia (Hz):
-
-    H/h = R J(J+1)
-          - g   (muN/h) B  Jz
-          - gI  (muN/h) B  Iz
-          - cIJ [ Iz Jz + 1/2 (I+ J- + I- J+) ]
-
-DOS JUEGOS DE CONSTANTES, con procedencia explicita:
-
-  1) chou2017()  — FISICAS, Chou Tabla II (v=0, J=0..14), transcritas del PDF:
-       g   = -1.35 (J=0..2) ... -1.31 (J=14)
-       cIJ = 8.27 (J=0) ... 8.18 kHz (J=14);  8.26 kHz para J=1,2
-     Usar para: fisica real del CaH+, tasas BBR, extensiones J<=4 / J<=6
-     (Fig. S7), donde no hay tablas del RL-QLS que igualar.
-
-  2) rlqls_effective() — EFECTIVAS, obtenidas por ajuste de minimos cuadrados
-     de ESTE Hamiltoniano a las 16 frecuencias de la Tabla S2 del RL-QLS
-     (NO provienen de Chou):
-       g = -1.390,  cIJ = {1: 8.196, 2: 8.059} kHz,  B = 0.357 mT
-     Reproducen la S2 a rms 2.5 Hz / max 4.7 Hz. Usar para: benchmarks
-     exactos contra Fig. 2 / Fig. S2 / Tabla S2 / Tabla I.
-
-  HALLAZGO DOCUMENTADO (jul 2026): la Ec. S9 con las constantes publicadas
-  de Chou NO reproduce la Tabla S2 del RL-QLS bajo ninguna eleccion de B:
-     Chou puro (B=0.357):            rms 135 Hz, max 305 Hz
-     Chou, B libre (B->0.3616):      rms 103 Hz
-     g=-1.35 fijo, (c1,c2,B) libres: rms  69 Hz
-     todo libre -> (-1.390, 8.195, 8.059, B=0.3570): rms 2.6 Hz
-  B queda anclado en 0.357 por el termino gI*muN*B del proton, asi que el
-  g ~ -1.390 no es una degeneracion con el campo.
-
-  RESUELTO (Chou PDF completo, repositorio NIST, jul 2026):
-  (i) La "Tabla III" es la Extended Data Table 3: usa B=0.357 mT (de ahi
-      nuestro B), pero sus valores TEORICOS incluyen el corrimiento por
-      acoplamiento off-resonante a otros subniveles inducido por los haces
-      Raman -> NO son autovalores desnudos; que el check de abajo de
-      9.84/13.44 no coincida con 10.73/13.51 es lo esperado.
-  (ii) Chou declara ±5% de incertidumbre teorica en g y cIJ (y hasta 13%
-      de sensibilidad de base en g) -> el g_eff=-1.390 del RL-QLS (3% de
-      -1.35) cae dentro de la banda declarada por la propia fuente.
-      Hipotesis: RL-QLS tomo g/cIJ de la Extended Data Table 1 (valores en
-      r0 por metodo/base) en vez de la Table 2 promediada vibracionalmente.
-  (iii) El ancla Rabi experimental de Chou es 2.078(14) kHz (= Tabla S2,
-      pulsos 10/11); el "2.087" del SM del RL-QLS es un typo por
-      transposicion de digitos. calibrate() debe anclar a 2.078.
-
-CONFIRMADO CONTRA CHOU (Ecs. 1 y 12-14): este codigo reproduce la solucion
-cerrada de Chou a precision de maquina — Ec. 14 (energias) a ~1e-4 Hz sobre
-una escala de 1e11 Hz, Ec. 12 (coeficientes, con Y=(Ea-Eb)/2) a 1e-16 — y la
-regla xi es textual de Chou (signos relativos; en extremos, el signo de m).
-La Ec. 1 NO tiene terminos extra: las discrepancias con la Tabla S2 (RL-QLS)
-y con la Tabla III (Chou) son de NUMEROS/condiciones, no de fisica.
-
-Otras constantes:
-    R     = 144   GHz    (Chou Ec. 1, ref. Abe 2012; 4R = 0.576 THz — el
-                          "0.57 THz" de la Fig. 2a del RL-QLS es truncado)
-    gI    = 5.585695     (proton, CODATA; apantallamiento ~ppm, despreciable)
-    B     = 0.357 mT     (Chou Tabla III; el texto del RL-QLS redondea a 0.36)
-    muN/h = 7.622593 MHz/T (CODATA)
-
-CORRECCIONES CLAVE respecto a versiones anteriores:
-  1) Etiquetado de xi POR ESTRUCTURA DEL AUTOVECTOR (Chou Ec. 12), no por
-     orden de energia. En la base del doblete
-        (a = |mJ=m-1/2, mI=+1/2>,  b = |mJ=m+1/2, mI=-1/2>):
-        - componentes con el MISMO signo  -> xi = +
-        - componentes con signo OPUESTO   -> xi = -
-     Con cIJ > 0 el acoplamiento fuera de la diagonal es negativo en todos
-     los bloques, asi que xi=+ es SIEMPRE el estado inferior del doblete y
-     xi=- el superior (consistente con Chou Ec. 14 y con la Fig. 2a).
-  2) SIN calibracion a los 26.1/37.6 kHz de la Fig 2a: eso empuja cIJ hacia
-     ~19.6 kHz (unfisico). Se usan constantes con procedencia documentada.
-
-Ordenamiento I..XVI (identico a Fig. S5 del RL-QLS):
-    dentro de cada J -> primero xi=+ (m ascendente), luego xi=- (m ascendente).
-"""
-
 import numpy as np
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple, Optional, Union
@@ -340,7 +256,9 @@ class CaHHamiltonian:
             (8, (2, +0.5, '-'), (2, -0.5, '-'),  -6.56),
             (9, (1, +0.5, '-'), (1, -0.5, '-'),  -7.26),
             (9, (2, -0.5, '-'), (2, -1.5, '-'),  -7.40),
-            (11, (1, -0.5, '-'), (1, -1.5, '-'), -9.87),
+            (10, (1, -1.5, '-'), (1, -0.5, '-'),   9.87),
+            (11, (1, -0.5, '-'), (1, -1.5, '-'),  -9.87),
+            (12, (2, -2.5, '-'), (2, -1.5, '-'),  13.13),
             (13, (2, -1.5, '-'), (2, -2.5, '-'), -13.13),
         ]
         errs = []

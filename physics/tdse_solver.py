@@ -1,56 +1,9 @@
+
 """
 tdse_solver.py — Matrices de transicion A0/A1 via TDSE (Ecs. S4-S5).
 ====================================================================
 Consume directamente generate_pulses_cah (generate_nist_library /
 generate_pulse_library), sin depender de pulses_cah.py.
-
-Formulacion (frame rotante al laser):
-El paper resuelve la TDSE con H0 + H_int(t), con el operador Lamb-Dicke
-(I + i*lam*(a+a')) y factores motional e^{+-i*w_mot*t} (Ec. S5). En el frame
-rotante al laser, la banda lateral azul (a') queda resonante y estatica,
-mientras portadora (I) y roja (a) oscilan a ~w_mot~5 MHz y se promedian (RWA;
-correccion O(lam*Om/w_mot)~1e-4). Entonces U = exp(-i H_rot D) es exacto sin
-integrar oscilaciones rapidas. Verificado contra la sesolve completa
-dependiente de t: coincide a <1e-3 para un pulso pi.
-
-DOS PUNTOS CRITICOS (corregidos tras comparar con la Fig. S2):
-
- 1) El Hamiltoniano incluye TODAS las transiciones del mismo dm que el pulso
-    (Ec. S4 suma sobre todos los |J>->|J'>), no solo la(s) asignada(s). Las
-    asignadas definen f_L y D; el detuning suprime las demas. Con una
-    polarizacion fija (pi + sigma-/+) solo se excita UN dm, por eso se
-    restringe al del pulso.
-
- 2) n_mot = 4 (NO 2). Con n_mot=2 el estado |f,1> no tiene a donde ir y todo
-    pulso pi transfiere 1.000; con 4, el mismo laser puede seguir empujando
-    |f,1> -> |siguiente,2> en las cascadas, y esa fuga es real. El caption de
-    la Fig. S2 lo dice ("the most significant five transitions are plotted")
-    y las Figs. S9/S11 confirman "a simulation that includes 4 motional states".
-
-    Efecto medido (transferencia principal vs Fig. S2):
-        pulso   n_mot=2 solo asignadas   n_mot=4 + todas   Fig. S2
-          1            1.000                  0.892          0.89
-          2            1.000                  0.991          0.99
-          7            1.000                  0.993          0.99
-          8            1.000                  0.975          0.97
-    Los 13 pulsos reproducen la Fig. S2 a +-0.01. Ojo con los
-    multi-transicion asimetricos (3 y 9): la figura rotula la transicion de
-    mayor TRANSFERENCIA, que es la LENTA, no la de mayor Omega (la rapida se
-    sobre-rota). P3: lenta 0.943 (Fig.S2 0.94), rapida 0.760.
-    P9: lenta 0.735 (0.74), rapida 0.569. Esto valida ademas D=52.6 para el
-    pulso 3: con la regla de la lenta (56.2) la rapida cae a 0.474.
-
-    Impacto en el entorno (5000 episodios):
-        sweeping protocol:  8.97 -> 9.57  (paper: 9.7; error 1.3%)
-        politica aleatoria: 19.14 -> 21.43 (= arranque de la curva Fig. 2b)
-
-k>=1 no se distingue: A1 suma poblacion en n>=1 (el cooling posterior devuelve
-el modo a n=0 -> se rastrea solo poblacion molecular). A0+A1 conserva por
-columna (norma del estado inicial |l,0>).
-
-Conversiones libreria -> solver (validadas vs Fig. S1 de Chou):
-  f_L (Hz)  = nu_mot + promedio de (E_f - E_i)/h de las transiciones del pulso
-  D_s (s)   = D_2pi / (2*pi*1e3)        (D_2pi viene en 2pi^-1 ms)
 """
 import os, sys, pickle, time
 import numpy as np
@@ -61,6 +14,7 @@ from physics.hamiltonian_cah import CaHHamiltonian, rlqls_effective
 from physics.generate_pulses_cah import (generate_nist_library,
                                          generate_pulse_library, LAMBDA_LD)
 from physics.Raman_rates import RamanRates
+
 
 NU_MOT_HZ = 5.164e6   # modo motional OOP (NIST)
 OMEGA_MIN_HZ = 50.0   # corte para incluir una transicion en el Hamiltoniano
@@ -107,7 +61,7 @@ class TDSESolverCaH:
                    la fuga |f,1> -> |siguiente,2> y todo pulso pi da 1.000.
         rates    : RamanRates ya calibrado (se crea si no se pasa).
         """
-        self.ham = ham or CaHHamiltonian(rlqls_effective())
+        self.ham = ham or CaHHamiltonian()  # default = Chou 2017 (fisicas)
         raw_lib = library if library is not None else \
             generate_nist_library(ham=self.ham)
         self.pulses = [_pulse_to_solver(self.ham, p) for p in raw_lib]
@@ -258,12 +212,12 @@ if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--n-mot", type=int, default=4)
     ap.add_argument("--cache", type=str, default=None)
-    ap.add_argument("--preset", choices=["rlqls", "chou"], default="rlqls")
+    ap.add_argument("--preset", choices=["rlqls", "chou"], default="chou")
     args = ap.parse_args()
 
     from physics.hamiltonian_cah import chou2017
-    ham = CaHHamiltonian(rlqls_effective() if args.preset == "rlqls"
-                         else chou2017())
+    ham = CaHHamiltonian(chou2017() if args.preset == "chou"
+                         else rlqls_effective())
 
     print("=" * 60 + "\nTDSE Solver CaH+ (frame rotante)\n" + "=" * 60)
     s = TDSESolverCaH(ham=ham, n_mot=args.n_mot, cache_path=args.cache)

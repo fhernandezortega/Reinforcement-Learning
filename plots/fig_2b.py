@@ -67,7 +67,7 @@ avg_episodes = np.arange(window, len(steps) + 1)
 
 fig, ax = plt.subplots(figsize=(4.2, 4.0))
 
-ax.plot(episodes, steps, color="orange", linewidth=0.6, alpha=0.6,
+ax.plot(episodes, steps, color="orange", linewidth=0.4, alpha=0.7,
         label="RL individual", zorder=1)
 ax.plot(avg_episodes, avg_steps, color="blue", linewidth=1.6,
         label="RL averaged", zorder=3)

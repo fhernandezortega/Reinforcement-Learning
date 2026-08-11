@@ -1,20 +1,3 @@
-"""
-generate_pulses_cah.py — Genera la biblioteca de pulsos DESDE LA FISICA,
-sin copiar la Tabla S2. Los 5 pasos:
-  1. Diagonalizar H            (hamiltonian_cah.py -> energias, autovectores)
-  2. Listar transiciones Δm=±1 intra-J con su frecuencia f = (E_f-E_i)/h
-  3. Calcular la tasa Ω        (raman_rates.py, autovectores + 3j + polariz.)
-     — |Ω(i→j)| = |Ω(j→i)| (Ec. S10): para Δm=+1 (config π+σ⁺) se usa la
-       tasa de la direccion inversa que RamanRates (π+σ⁻) si calcula.
-  4. Filtrar (Ω<umbral) y agrupar cuasi-degeneradas (|Δf| < λ_LD·Ω)
-  5. Calcular D = π/(λ_LD·Ω_eff): promedio de duraciones π (media armonica
-     de las Ω del grupo); si max/min >= 3, la de la transicion lenta (Sec. SC)
-
-Para J∈{1,2} produce un superconjunto de los 13 pulsos de la Tabla S2
-(incluye los 3 multi-transicion 3,4,9); generate_nist_library() lo filtra
-al esquema NIST exacto. Para sistemas grandes (J≤4, J≤6) generate_pulse_library
-produce las bibliotecas de 68/131 pulsos que el paper no tabula.
-"""
 import sys
 
 import numpy as np

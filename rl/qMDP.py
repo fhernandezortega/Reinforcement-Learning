@@ -1,20 +1,5 @@
 """
 qmdp.py — Update de valor qMDP (RL-QLS, Ec. S18) para el agente DQN.
-
-Diferencia MDP (Ec. S17) vs qMDP (Ec. S18):
-  MDP :  y = R + gamma * max_a Q(S_{t+1}, a)          con S_{t+1} MUESTREADO
-  qMDP:  y = R + gamma * [ p0 * max_a Q(S'_{k=0}, a)
-                         + p1 * max_a Q(S'_{k=1}, a) ] con AMBAS ramas deterministas
-
-El qMDP promedia explicitamente sobre los dos resultados de medida ponderados
-por p0,p1 (POVM, Ecs. S2-S3). No muestrea k para el target -> menor varianza y,
-para Hilbert grandes (H3O+), imprescindible (loss ~3 ordenes menor, Fig. S8).
-
-gamma = 1 (paper). R = -1 por paso. Cada rama que ya es pura NO hace bootstrap.
-
-Se provee:
-  - qmdp_targets_np : referencia NumPy (para validar la matematica).
-  - qmdp_loss_torch : version PyTorch lista para el bucle de entrenamiento (doble-Q).
 """
 import sys
 
@@ -96,8 +81,9 @@ def qmdp_loss_torch(q_online, q_target, batch, A0_t, A1_t,
         def boot(Sx):
             a_star = q_online(Sx).argmax(1)                       # doble-Q
             return q_target(Sx).gather(1, a_star.unsqueeze(1)).squeeze(1)
-        b0 = torch.where(term0, torch.zeros(B), boot(S0))
-        b1 = torch.where(term1, torch.zeros(B), boot(S1))
+        zeros = torch.zeros(B, device=S.device, dtype=S.dtype)
+        b0 = torch.where(term0, zeros, boot(S0))
+        b1 = torch.where(term1, zeros, boot(S1))
         y = R + gamma * (p0*b0 + p1*b1)                          # Ec. S18
 
     q_sa = q_online(S).gather(1, a.unsqueeze(1)).squeeze(1)
